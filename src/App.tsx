@@ -865,12 +865,22 @@ async function handleUpdateTicketDetails(
         </div>
 
         <button
-          className="primary-button"
-          type="button"
-          onClick={() => setIsFormOpen(true)}
-        >
-          ＋ New ticket
-        </button>
+  className="primary-button"
+  type="button"
+  onClick={() => {
+    const now = new Date()
+    const localDateTime = new Date(
+      now.getTime() - now.getTimezoneOffset() * 60_000
+    )
+      .toISOString()
+      .slice(0, 16)
+
+    setNewAssignedAt(localDateTime)
+    setIsFormOpen(true)
+  }}
+>
+  ＋ New ticket
+</button>
 
         <button
           type="button"
