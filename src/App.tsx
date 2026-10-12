@@ -1974,7 +1974,7 @@ async function handleUpdateTicketDetails(
   </div>
 
   <div className="dashboard-title">
-    <p className="eyebrow">QUALITY OPERATIONS</p>
+    <p className="eyebrow">INFONEO TEAM QUALITY OPERATIONS</p>
     <h1>Ticket dashboard</h1>
   </div>
 
