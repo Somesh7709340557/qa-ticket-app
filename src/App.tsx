@@ -29,6 +29,95 @@ type Holiday = {
   holiday_name: string
 }
 
+type AssignedDateFilter =
+  | 'all'
+  | 'thisWeek'
+  | 'lastWeek'
+  | 'thisMonth'
+  | 'lastMonth'
+  | 'currentQuarter'
+
+type DashboardMetricKey =
+  | 'assigned'
+  | 'open'
+  | 'resolved'
+  | 'withinSla'
+  | 'slaViolated'
+
+type DashboardMetricPeriod = 'today' | 'overall'
+
+type DashboardMetricSelection = {
+  period: DashboardMetricPeriod
+  key: DashboardMetricKey
+} | null
+
+type DashboardMetricCounts = Record<DashboardMetricKey, number>
+
+const dashboardMetricDefinitions: {
+  key: DashboardMetricKey
+  label: string
+}[] = [
+  { key: 'assigned', label: 'Total assigned' },
+  { key: 'open', label: 'Open' },
+  { key: 'resolved', label: 'Resolved' },
+  { key: 'withinSla', label: 'Within SLA' },
+  { key: 'slaViolated', label: 'SLA violated' },
+]
+
+const assignedDateOptions: {
+  value: AssignedDateFilter
+  label: string
+}[] = [
+  { value: 'all', label: 'All dates' },
+  { value: 'thisWeek', label: 'This week' },
+  { value: 'lastWeek', label: 'Last week' },
+  { value: 'thisMonth', label: 'This month' },
+  { value: 'lastMonth', label: 'Last month' },
+  { value: 'currentQuarter', label: 'Current quarter' },
+]
+
+function isAssignedDateInFilter(
+  assignedAt: string | undefined,
+  filter: AssignedDateFilter,
+) {
+  if (filter === 'all') return true
+  if (!assignedAt) return false
+
+  const assignedDate = new Date(assignedAt)
+  if (Number.isNaN(assignedDate.getTime())) return false
+
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+
+  const thisWeekStart = new Date(today)
+  thisWeekStart.setDate(today.getDate() - ((today.getDay() + 6) % 7))
+
+  let start: Date
+  let end: Date
+
+  if (filter === 'thisWeek') {
+    start = thisWeekStart
+    end = new Date(thisWeekStart)
+    end.setDate(end.getDate() + 7)
+  } else if (filter === 'lastWeek') {
+    end = thisWeekStart
+    start = new Date(thisWeekStart)
+    start.setDate(start.getDate() - 7)
+  } else if (filter === 'thisMonth') {
+    start = new Date(today.getFullYear(), today.getMonth(), 1)
+    end = new Date(today.getFullYear(), today.getMonth() + 1, 1)
+  } else if (filter === 'lastMonth') {
+    start = new Date(today.getFullYear(), today.getMonth() - 1, 1)
+    end = new Date(today.getFullYear(), today.getMonth(), 1)
+  } else {
+    const quarterStartMonth = Math.floor(today.getMonth() / 3) * 3
+    start = new Date(today.getFullYear(), quarterStartMonth, 1)
+    end = new Date(today.getFullYear(), quarterStartMonth + 3, 1)
+  }
+
+  return assignedDate >= start && assignedDate < end
+}
+
 const schemeOptions = [
   'ECLGS',
   'CGFMU',
@@ -136,13 +225,20 @@ function App() {
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('All')
   const [priorityFilter, setPriorityFilter] = useState('All')
+  const [schemeFilter, setSchemeFilter] = useState('All')
+const [developerFilter, setDeveloperFilter] = useState('All')
+const [assignedDateFilter, setAssignedDateFilter] =
+  useState<AssignedDateFilter>('all')
+  const [dashboardMetricSelection, setDashboardMetricSelection] =
+    useState<DashboardMetricSelection>(null)
   const [tickets, setTickets] = useState<Ticket[]>(initialTickets)
   const [holidayDates, setHolidayDates] = useState<string[]>([])
   const [holidays, setHolidays] = useState<Holiday[]>([])
   const [newHolidayDate, setNewHolidayDate] = useState('')
 const [newHolidayName, setNewHolidayName] = useState('')
 const [editingHolidayId, setEditingHolidayId] = useState<string | null>(null)
-  const [resolvedTodayCount, setResolvedTodayCount] = useState(0)
+  const [resolutionTimeByTicket, setResolutionTimeByTicket] =
+  useState<Record<string, string>>({})
   const [currentTime, setCurrentTime] = useState(() => Date.now())
 
   useEffect(() => {
@@ -169,33 +265,37 @@ const [editingHolidayId, setEditingHolidayId] = useState<string | null>(null)
   return () => window.clearInterval(intervalId)
 }, [])
 
-  useEffect(() => {
+useEffect(() => {
   if (!session) return
 
   let cancelled = false
 
-  async function loadResolvedTodayCount() {
-    const startOfToday = new Date()
-    startOfToday.setHours(0, 0, 0, 0)
-
+  async function loadResolutionTimes() {
     const { data, error } = await supabase
       .from('ticket_status_history')
-      .select('ticket_id')
+      .select('ticket_id, changed_at')
       .eq('to_status', 'Resolved')
-      .gte('changed_at', startOfToday.toISOString())
+      .order('changed_at', { ascending: false })
 
     if (error) {
-      console.error('Could not load resolved ticket count:', error.message)
+      console.error('Could not load ticket resolution times:', error.message)
       return
     }
 
-    if (!cancelled) {
-      const uniqueTicketIds = new Set((data ?? []).map((row) => row.ticket_id))
-      setResolvedTodayCount(uniqueTicketIds.size)
+    if (cancelled) return
+
+    const latestResolutionByTicket: Record<string, string> = {}
+
+    for (const row of data ?? []) {
+      if (!latestResolutionByTicket[row.ticket_id]) {
+        latestResolutionByTicket[row.ticket_id] = row.changed_at
+      }
     }
+
+    setResolutionTimeByTicket(latestResolutionByTicket)
   }
 
-  void loadResolvedTodayCount()
+  void loadResolutionTimes()
 
   return () => {
     cancelled = true
@@ -386,9 +486,73 @@ setHolidayDates(data.map((row) => row.holiday_date))
     }
   }, [selectedTicket?.id])
 
+  const todayStart = new Date()
+  todayStart.setHours(0, 0, 0, 0)
+
+  const tomorrowStart = new Date(todayStart)
+  tomorrowStart.setDate(tomorrowStart.getDate() + 1)
+
+  function isAssignedToday(ticket: Ticket) {
+    if (!ticket.assignedAt) return false
+    const assignedAt = new Date(ticket.assignedAt).getTime()
+    return assignedAt >= todayStart.getTime() && assignedAt < tomorrowStart.getTime()
+  }
+
+  function isWithinSla(ticket: Ticket) {
+    if (!ticket.slaDueAt) return false
+    const dueTime = new Date(ticket.slaDueAt).getTime()
+    if (!Number.isFinite(dueTime)) return false
+
+    if (ticket.status === 'Resolved') {
+      const resolutionTime = resolutionTimeByTicket[ticket.id]
+      return Boolean(resolutionTime && new Date(resolutionTime).getTime() <= dueTime)
+    }
+
+    if (ticket.status === 'On Hold' || ticket.status === 'Business Pending') return true
+    return currentTime <= dueTime
+  }
+
+  function isSlaViolated(ticket: Ticket) {
+    if (!ticket.slaDueAt) return false
+    const dueTime = new Date(ticket.slaDueAt).getTime()
+    if (!Number.isFinite(dueTime)) return false
+
+    if (ticket.status === 'Resolved') {
+      const resolutionTime = resolutionTimeByTicket[ticket.id]
+      return Boolean(resolutionTime && new Date(resolutionTime).getTime() > dueTime)
+    }
+
+    if (ticket.status === 'On Hold' || ticket.status === 'Business Pending') return false
+    return currentTime > dueTime
+  }
+
+  function matchesMetric(ticket: Ticket, key: DashboardMetricKey) {
+    if (key === 'assigned') return true
+    if (key === 'open') return ticket.status !== 'Resolved'
+    if (key === 'resolved') return ticket.status === 'Resolved'
+    if (key === 'withinSla') return isWithinSla(ticket)
+    return isSlaViolated(ticket)
+  }
+
+  function getMetricCounts(dataset: Ticket[]): DashboardMetricCounts {
+    return {
+      assigned: dataset.length,
+      open: dataset.filter((ticket) => ticket.status !== 'Resolved').length,
+      resolved: dataset.filter((ticket) => ticket.status === 'Resolved').length,
+      withinSla: dataset.filter(isWithinSla).length,
+      slaViolated: dataset.filter(isSlaViolated).length,
+    }
+  }
+
+  const todayTickets = tickets.filter(isAssignedToday)
+  const overallTickets = tickets.filter((ticket) =>
+    isAssignedDateInFilter(ticket.assignedAt, assignedDateFilter),
+  )
+  const todayMetricCounts = getMetricCounts(todayTickets)
+  const overallMetricCounts = getMetricCounts(overallTickets)
+
   const filteredTickets = tickets.filter((ticket) => {
     const search = searchTerm.toLowerCase()
-
     const matchesSearch =
       ticket.id.toLowerCase().includes(search) ||
       ticket.title.toLowerCase().includes(search) ||
@@ -396,51 +560,68 @@ setHolidayDates(data.map((row) => row.holiday_date))
       ticket.developer.toLowerCase().includes(search) ||
       ticket.priority.toLowerCase().includes(search) ||
       ticket.status.toLowerCase().includes(search)
+    const matchesStatus = statusFilter === 'All' || ticket.status === statusFilter
+    const matchesPriority = priorityFilter === 'All' || ticket.priority === priorityFilter
+    const matchesScheme = schemeFilter === 'All' || ticket.scheme === schemeFilter
+    const matchesDeveloper = developerFilter === 'All' || ticket.developer === developerFilter
+    const matchesAssignedDate = dashboardMetricSelection?.period === 'today'
+      ? isAssignedToday(ticket)
+      : isAssignedDateInFilter(ticket.assignedAt, assignedDateFilter)
+    const matchesSelectedMetric =
+      !dashboardMetricSelection || matchesMetric(ticket, dashboardMetricSelection.key)
 
-    const matchesStatus =
-      statusFilter === 'All' || ticket.status === statusFilter
-
-    const matchesPriority =
-      priorityFilter === 'All' || ticket.priority === priorityFilter
-
-    return matchesSearch && matchesStatus && matchesPriority
+    return matchesSearch && matchesStatus && matchesPriority &&
+      matchesScheme && matchesDeveloper && matchesAssignedDate && matchesSelectedMetric
   })
 
-const breachedCount = tickets.filter((ticket) => {
-  const isPaused =
-    ticket.status === 'On Hold' || ticket.status === 'Business Pending'
-  const isResolved = ticket.status === 'Resolved'
-  const dueTime = ticket.slaDueAt
-    ? new Date(ticket.slaDueAt).getTime()
-    : null
+  function renderMetricPanel(
+    period: DashboardMetricPeriod,
+    title: string,
+    counts: DashboardMetricCounts,
+  ) {
+    return (
+      <section className="metric-panel" aria-label={title}>
+        <h2>{title}</h2>
+        <div className="metric-list">
+          {dashboardMetricDefinitions.map((metric) => {
+            const selected =
+              dashboardMetricSelection?.period === period &&
+              dashboardMetricSelection.key === metric.key
 
-  return !isPaused && !isResolved && dueTime !== null && dueTime < currentTime
-}).length
+            return (
+              <button
+                key={metric.key}
+                type="button"
+                className={`metric-button${selected ? ' selected' : ''}`}
+                aria-pressed={selected}
+                onClick={() =>
+                  setDashboardMetricSelection((current) =>
+                    current?.period === period && current.key === metric.key
+                      ? null
+                      : { period, key: metric.key },
+                  )
+                }
+              >
+                <span>{metric.label}</span>
+                <strong>{counts[metric.key]}</strong>
+              </button>
+            )
+          })}
+        </div>
+      </section>
+    )
+  }
 
-const atRiskDeadline = addBusinessHours(
-  new Date(currentTime),
-  1,
-  holidayDates,
-).getTime()
+  const clearDashboardFilters = () => {
+    setDashboardMetricSelection(null)
+    setStatusFilter('All')
+    setPriorityFilter('All')
+    setSchemeFilter('All')
+    setDeveloperFilter('All')
+    setSearchTerm('')
+  }
 
-const atRiskCount = tickets.filter((ticket) => {
-  const isPaused =
-    ticket.status === 'On Hold' || ticket.status === 'Business Pending'
-  const isResolved = ticket.status === 'Resolved'
-  const dueTime = ticket.slaDueAt
-    ? new Date(ticket.slaDueAt).getTime()
-    : null
-
-  return (
-    !isPaused &&
-    !isResolved &&
-    dueTime !== null &&
-    dueTime > currentTime &&
-    dueTime <= atRiskDeadline
-  )
-}).length
-
-async function handleAddHoliday(event: FormEvent<HTMLFormElement>) {
+  async function handleAddHoliday(event: FormEvent<HTMLFormElement>) {
   event.preventDefault()
 
   const holidayName = newHolidayName.trim()
@@ -656,110 +837,108 @@ async function handleDeleteHoliday(holiday: Holiday) {
     setNewRemark('')
   }
 
- async function handleStatusChange(newStatus: Ticket['status']) {
-  if (!selectedTicket) return
+  async function handleStatusChange(newStatus: Ticket['status']) {
+    if (!selectedTicket) return
 
-  const previousStatus = selectedTicket.status
-  const wasPaused =
-  previousStatus === 'On Hold' || previousStatus === 'Business Pending'
-const willBePaused =
-  newStatus === 'On Hold' || newStatus === 'Business Pending'
-  const now = new Date()
+    const previousStatus = selectedTicket.status
+    const wasPaused =
+      previousStatus === 'On Hold' || previousStatus === 'Business Pending'
+    const willBePaused =
+      newStatus === 'On Hold' || newStatus === 'Business Pending'
+    const now = new Date()
 
-  const updates: {
-    status: Ticket['status']
-    on_hold_started_at?: string | null
-    sla_due_at?: string
-  } = {
-    status: newStatus,
-  }
+    const updates: {
+      status: Ticket['status']
+      on_hold_started_at?: string | null
+      sla_due_at?: string
+    } = { status: newStatus }
 
-  let nextSlaDueAt: Date | null = null
+    let nextSlaDueAt: Date | null = null
 
-  if (newStatus === 'On Hold' && previousStatus !== 'On Hold') {
-    updates.on_hold_started_at = now.toISOString()
-  }
+    if (willBePaused && !wasPaused) {
+      updates.on_hold_started_at = now.toISOString()
+    }
 
-  if (previousStatus === 'On Hold' && newStatus !== 'On Hold') {
-    updates.on_hold_started_at = null
+    if (wasPaused && !willBePaused) {
+      updates.on_hold_started_at = null
 
-    if (selectedTicket.onHoldStartedAt && selectedTicket.slaDueAt) {
-      const pausedBusinessHours = getBusinessHoursBetween(
-        new Date(selectedTicket.onHoldStartedAt),
-        now,
-        holidayDates,
-      )
-
-      if (pausedBusinessHours > 0) {
-        nextSlaDueAt = addBusinessHours(
-          new Date(selectedTicket.slaDueAt),
-          pausedBusinessHours,
+      if (selectedTicket.onHoldStartedAt && selectedTicket.slaDueAt) {
+        const pausedBusinessHours = getBusinessHoursBetween(
+          new Date(selectedTicket.onHoldStartedAt),
+          now,
           holidayDates,
         )
-        updates.sla_due_at = nextSlaDueAt.toISOString()
+
+        if (pausedBusinessHours > 0) {
+          nextSlaDueAt = addBusinessHours(
+            new Date(selectedTicket.slaDueAt),
+            pausedBusinessHours,
+            holidayDates,
+          )
+          updates.sla_due_at = nextSlaDueAt.toISOString()
+        }
       }
     }
-  }
 
-  const { error } = await supabase
-    .from('tickets')
-    .update(updates)
-    .eq('id', selectedTicket.id)
+    const { error } = await supabase
+      .from('tickets')
+      .update(updates)
+      .eq('id', selectedTicket.id)
 
-  if (error) {
-    alert(`Status could not be saved: ${error.message}`)
-    return
-  }
+    if (error) {
+      alert(`Status could not be saved: ${error.message}`)
+      return
+    }
 
-  const { error: historyError } = await supabase
-    .from('ticket_status_history')
-    .insert({
-      ticket_id: selectedTicket.id,
-      from_status: previousStatus,
-      to_status: newStatus,
-    })
+    const { error: historyError } = await supabase
+      .from('ticket_status_history')
+      .insert({
+        ticket_id: selectedTicket.id,
+        from_status: previousStatus,
+        to_status: newStatus,
+      })
 
-  if (historyError) {
-    alert(
-      `Status changed, but its history could not be saved: ${historyError.message}`,
+    if (historyError) {
+      alert(
+        `Status changed, but its history could not be saved: ${historyError.message}`,
+      )
+    }
+
+    const updatedTicket: Ticket = {
+      ...selectedTicket,
+      status: newStatus,
+      onHoldStartedAt: willBePaused
+        ? selectedTicket.onHoldStartedAt ?? now.toISOString()
+        : undefined,
+      slaDueAt: nextSlaDueAt?.toISOString() ?? selectedTicket.slaDueAt,
+      due: willBePaused
+        ? 'Paused'
+        : nextSlaDueAt
+          ? formatDateTime(nextSlaDueAt)
+          : wasPaused
+            ? selectedTicket.slaDueAt
+              ? formatDateTime(selectedTicket.slaDueAt)
+              : '—'
+            : selectedTicket.due,
+    }
+
+    setTickets((currentTickets) =>
+      currentTickets.map((ticket) =>
+        ticket.id === selectedTicket.id ? updatedTicket : ticket,
+      ),
     )
+    setSelectedTicket(updatedTicket)
+
+    setStatusHistory((history) => ({
+      ...history,
+      [selectedTicket.id]: [
+        ...(history[selectedTicket.id] ?? []),
+        `${previousStatus} → ${newStatus} · ${formatDateTime(now)}`,
+      ],
+    }))
   }
 
- const updatedTicket: Ticket = {
-  ...selectedTicket,
-  status: newStatus,
-  onHoldStartedAt: willBePaused
-    ? selectedTicket.onHoldStartedAt ?? now.toISOString()
-    : undefined,
-  slaDueAt: nextSlaDueAt?.toISOString() ?? selectedTicket.slaDueAt,
-  due: willBePaused
-    ? 'Paused'
-    : nextSlaDueAt
-      ? formatDateTime(nextSlaDueAt)
-      : wasPaused
-        ? selectedTicket.slaDueAt
-          ? formatDateTime(selectedTicket.slaDueAt)
-          : '—'
-        : selectedTicket.due,
-}
-
-  setTickets((currentTickets) =>
-    currentTickets.map((ticket) =>
-      ticket.id === selectedTicket.id ? updatedTicket : ticket,
-    ),
-  )
-  setSelectedTicket(updatedTicket)
-
-  setStatusHistory((history) => ({
-    ...history,
-    [selectedTicket.id]: [
-      ...(history[selectedTicket.id] ?? []),
-      `${previousStatus} → ${newStatus} · ${formatDateTime(now)}`,
-    ],
-  }))
-}
-
-async function handleDeveloperChange(newDeveloper: string) {
+  async function handleDeveloperChange(newDeveloper: string) {
   if (!selectedTicket || newDeveloper === selectedTicket.developer) return
 
   const assignedAt = new Date()
@@ -858,262 +1037,260 @@ async function handleUpdateTicketDetails(
 
   return (
     <main className="app">
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">QUALITY OPERATIONS</p>
-          <h1>Ticket dashboard</h1>
-        </div>
-
-        <button
-  className="primary-button"
-  type="button"
-  onClick={() => {
-    const now = new Date()
-    const localDateTime = new Date(
-      now.getTime() - now.getTimezoneOffset() * 60_000
-    )
-      .toISOString()
-      .slice(0, 16)
-
-    setNewAssignedAt(localDateTime)
-    setIsFormOpen(true)
-  }}
->
-  ＋ New ticket
-</button>
-
-        <button
-          type="button"
-          onClick={async () => {
-            const { error } = await supabase.auth.signOut()
-            if (error) alert(`Could not sign out: ${error.message}`)
-          }}
-        >
-          Sign out
-        </button>
-      </header>
-
-      <section className="summary" aria-label="Ticket summary">
-        <article className="summary-card">
-          <span>Open tickets</span>
-          <strong>
-           {tickets.filter((ticket) => ticket.status !== 'Resolved').length}
-          </strong>
-          <small>Across all schemes</small>
-        </article>
-
-        <article className="summary-card">
-          <span>At risk</span>
-         <strong>{atRiskCount}</strong>
-          <small>Approaching SLA</small>
-        </article>
-
-        <article className="summary-card">
-          <span>Breached</span>
-         <strong>{breachedCount}</strong>
-          <small>Needs attention</small>
-        </article>
-
-        <article className="summary-card">
-          <span>Resolved today</span>
-          <strong>{resolvedTodayCount}</strong>
-          <small>Since 12:00 AM</small>
-        </article>
-      </section>
-
-      {session.user.email?.toLowerCase() === 'ncgtc.support@infoneo.in' && (
-  <section className="ticket-section" style={{ marginBottom: '24px' }}>
-    <div className="section-heading">
-
-      <div>
-        <h2>Holiday calendar</h2>
-        <p>Holidays listed here are excluded from SLA calculations.</p>
-      </div>
-    </div>
-<form
-  onSubmit={handleAddHoliday}
-  style={{
-    display: 'flex',
-    alignItems: 'end',
-    gap: '12px',
-    flexWrap: 'wrap',
-    padding: '0 24px 16px',
-  }}
->
-  <label style={{ display: 'grid', gap: '6px' }}>
-    Holiday date
-    <input
-      type="date"
-      required
-      value={newHolidayDate}
-      onChange={(event) => setNewHolidayDate(event.target.value)}
-    />
-  </label>
-
-  <label style={{ display: 'grid', gap: '6px' }}>
-    Holiday name
-    <input
-      required
-      value={newHolidayName}
-      onChange={(event) => setNewHolidayName(event.target.value)}
-      placeholder="For example, Republic Day"
-    />
-  </label>
-
-  <button className="primary-button" type="submit">
-    <button className="primary-button" type="submit">
-      {editingHolidayId && (
+     <header className="topbar">
   <button
+    className="primary-button"
     type="button"
     onClick={() => {
-      setEditingHolidayId(null)
-      setNewHolidayDate('')
-      setNewHolidayName('')
+      const now = new Date()
+      const localDateTime = new Date(
+        now.getTime() - now.getTimezoneOffset() * 60_000,
+      )
+        .toISOString()
+        .slice(0, 16)
+
+      setNewAssignedAt(localDateTime)
+      setIsFormOpen(true)
     }}
   >
-    Cancel edit
+    ＋ New ticket
   </button>
-)}
-  {editingHolidayId ? 'Save changes' : 'Add holiday'}
-</button>
-  </button>
-</form>
 
-    {holidays.length > 0 ? (
-      <ul>
-        {holidays.map((holiday) => (
-         <li
-  key={holiday.id}
-  style={{
-    display: 'flex',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: '8px',
-  }}
->
-  <span>
-    {holiday.holiday_date.split('-').reverse().join('/')} —{' '}
-    {holiday.holiday_name}
-  </span>
+  <div>
+    <p className="eyebrow">QUALITY OPERATIONS</p>
+    <h1>Ticket dashboard</h1>
+  </div>
 
   <button
+    className="header-signout-button"
     type="button"
-    onClick={() => {
-      setEditingHolidayId(holiday.id)
-      setNewHolidayDate(holiday.holiday_date)
-      setNewHolidayName(holiday.holiday_name)
+    onClick={async () => {
+      const { error } = await supabase.auth.signOut()
+      if (error) alert(`Could not sign out: ${error.message}`)
     }}
   >
-    Edit
+    Sign out
   </button>
+</header>
 
-  <button
-    type="button"
-    onClick={() => void handleDeleteHoliday(holiday)}
-  >
-    Delete
-  </button>
-</li>
-        ))}
-      </ul>
-    ) : (
-      <p>No holidays added yet.</p>
-    )}
-  </section>
-)}
+      <div className="dashboard-layout">
+        <aside className="dashboard-left">
+          {renderMetricPanel('today', "Today's count", todayMetricCounts)}
+          {renderMetricPanel('overall', 'Overall ticket count', overallMetricCounts)}
+        </aside>
 
-      <section className="ticket-section">
-        <div className="section-heading">
-          <div>
-            <h2>Tickets</h2>
-            <p>Track assignments and service-level targets.</p>
+        <section className="ticket-section dashboard-tickets">
+          <div className="section-heading tickets-heading">
+            <div>
+              <h2>Tickets</h2>
+              <p>Track assignments and service-level targets.</p>
+            </div>
+            <div className="ticket-controls">
+              <select
+                aria-label="Filter by status"
+                value={statusFilter}
+                onChange={(event) => setStatusFilter(event.target.value)}
+              >
+                <option value="All">All statuses</option>
+                <option value="Open">Open</option>
+                <option value="In Progress">In Progress</option>
+                <option value="On Hold">On Hold</option>
+                <option value="Business Pending">Business Pending</option>
+                <option value="Resolved">Resolved</option>
+              </select>
+              <select
+                aria-label="Filter by priority"
+                value={priorityFilter}
+                onChange={(event) => setPriorityFilter(event.target.value)}
+              >
+                <option value="All">All priorities</option>
+                <option value="P1">P1</option>
+                <option value="P2">P2</option>
+                <option value="P3">P3</option>
+                <option value="P4">P4</option>
+              </select>
+              <select
+                value={schemeFilter}
+                onChange={(event) => setSchemeFilter(event.target.value)}
+                aria-label="Filter by scheme"
+              >
+                <option value="All">All schemes</option>
+                {schemeOptions.map((scheme) => (
+                  <option key={scheme} value={scheme}>{scheme}</option>
+                ))}
+              </select>
+              <select
+                value={developerFilter}
+                onChange={(event) => setDeveloperFilter(event.target.value)}
+                aria-label="Filter by developer"
+              >
+                <option value="All">All developers</option>
+                {developerOptions.map((developer) => (
+                  <option key={developer} value={developer}>{developer}</option>
+                ))}
+              </select>
+              <input
+                aria-label="Search tickets"
+                placeholder="Search tickets…"
+                value={searchTerm}
+                onChange={(event) => setSearchTerm(event.target.value)}
+              />
+            </div>
           </div>
 
-          <select
-            aria-label="Filter by status"
-            value={statusFilter}
-            onChange={(event) => setStatusFilter(event.target.value)}
-          >
-            <option value="All">All statuses</option>
-            <option value="Open">Open</option>
-            <option value="In Progress">In Progress</option>
-            <option value="On Hold">On Hold</option>
-            <option value="Business Pending">Business Pending</option>
-            <option value="Resolved">Resolved</option>
-          </select>
+          {(dashboardMetricSelection || searchTerm || statusFilter !== 'All' ||
+            priorityFilter !== 'All' || schemeFilter !== 'All' ||
+            developerFilter !== 'All') && (
+            <div className="active-filter-row">
+              <span>{filteredTickets.length} matching ticket{filteredTickets.length === 1 ? '' : 's'}</span>
+              <button type="button" onClick={clearDashboardFilters}>Clear filters</button>
+            </div>
+          )}
 
-          <select
-            aria-label="Filter by priority"
-            value={priorityFilter}
-            onChange={(event) => setPriorityFilter(event.target.value)}
-          >
-            <option value="All">All priorities</option>
-            <option value="P1">P1</option>
-            <option value="P2">P2</option>
-            <option value="P3">P3</option>
-            <option value="P4">P4</option>
-          </select>
-
-          <input
-            aria-label="Search tickets"
-            placeholder="Search tickets…"
-            value={searchTerm}
-            onChange={(event) => setSearchTerm(event.target.value)}
-          />
-        </div>
-
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Ticket</th>
-                <th>Issue</th>
-                <th>Priority</th>
-                <th>Status</th>
-                <th>Scheme</th>
-                <th>Developer</th>
-                <th>Assigned time</th>
-                <th>SLA due</th>
-              </tr>
-            </thead>
-
-            <tbody>
-              {filteredTickets.map((ticket) => (
-                <tr
-                  key={ticket.id}
-                  onClick={() => setSelectedTicket(ticket)}
-                  style={{ cursor: 'pointer' }}
-                >
-                  <td className="ticket-id">{ticket.id}</td>
-                  <td>{ticket.title}</td>
-                  <td>
-                    <span className={`priority ${ticket.priority.toLowerCase()}`}>
-                      {ticket.priority}
-                    </span>
-                  </td>
-                  <td>
-                    <span className="status">{ticket.status}</span>
-                  </td>
-                  <td>{ticket.scheme || '—'}</td>
-                  <td>{ticket.developer || '—'}</td>
-                  <td>
-                    {ticket.assignedAt
-                      ? formatDateTime(ticket.assignedAt)
-                      : '—'}
-                  </td>
-                  <td>{ticket.due}</td>
-                </tr>
-              ))}
-
-              {filteredTickets.length === 0 && (
+          <div className="table-wrap">
+            <table>
+              <thead>
                 <tr>
-                  <td colSpan={8}>No tickets match your search.</td>
+                  <th>Ticket</th>
+                  <th>Issue</th>
+                  <th>Priority</th>
+                  <th>Status</th>
+                  <th>Scheme</th>
+                  <th>Developer</th>
+                  <th>Assigned time</th>
+                  <th>SLA due</th>
                 </tr>
+              </thead>
+              <tbody>
+                {filteredTickets.map((ticket) => (
+                  <tr
+                    key={ticket.id}
+                    onClick={() => setSelectedTicket(ticket)}
+                    style={{ cursor: 'pointer' }}
+                  >
+                    <td className="ticket-id">{ticket.id}</td>
+                    <td>{ticket.title}</td>
+                    <td>
+                      <span className={`priority ${ticket.priority.toLowerCase()}`}>
+                        {ticket.priority}
+                      </span>
+                    </td>
+                    <td><span className="status">{ticket.status}</span></td>
+                    <td>{ticket.scheme || '—'}</td>
+                    <td>{ticket.developer || '—'}</td>
+                    <td>{ticket.assignedAt ? formatDateTime(ticket.assignedAt) : '—'}</td>
+                    <td>{ticket.due}</td>
+                  </tr>
+                ))}
+                {filteredTickets.length === 0 && (
+                  <tr><td colSpan={8}>No tickets match the selected filters.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <aside className="dashboard-right">
+          <section className="date-filter-panel">
+            <h2>Filter by assigned date</h2>
+            <div className="date-filter-list">
+              {assignedDateOptions.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  className={`date-filter-button${assignedDateFilter === option.value ? ' selected' : ''}`}
+                  aria-pressed={assignedDateFilter === option.value}
+                  onClick={() => {
+                    setAssignedDateFilter(option.value)
+                    setDashboardMetricSelection((current) =>
+                      current?.period === 'today' ? null : current,
+                    )
+                  }}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </section>
+
+          {session.user.email?.toLowerCase() === 'ncgtc.support@infoneo.in' && (
+            <section className="holiday-panel">
+              <h2>Holiday calendar</h2>
+              <p>Holidays are excluded from SLA calculations.</p>
+              <form onSubmit={handleAddHoliday} className="holiday-form">
+                <label>
+                  Holiday date
+                  <input
+                    type="date"
+                    required
+                    value={newHolidayDate}
+                    onChange={(event) => setNewHolidayDate(event.target.value)}
+                  />
+                </label>
+                <label>
+                  Holiday name
+                  <input
+                    required
+                    value={newHolidayName}
+                    onChange={(event) => setNewHolidayName(event.target.value)}
+                    placeholder="Holiday name"
+                  />
+                </label>
+                {editingHolidayId && (
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => {
+                      setEditingHolidayId(null)
+                      setNewHolidayDate('')
+                      setNewHolidayName('')
+                    }}
+                  >
+                    Cancel edit
+                  </button>
+                )}
+                <button className="primary-button holiday-submit" type="submit">
+                  {editingHolidayId ? 'Save changes' : 'Add holiday'}
+                </button>
+              </form>
+
+              {holidays.length > 0 ? (
+                <ul className="holiday-list">
+                  {holidays.map((holiday) => (
+                    <li key={holiday.id}>
+                      <span>
+                        {holiday.holiday_date.split('-').reverse().join('/')} — {holiday.holiday_name}
+                      </span>
+                      <div>
+                        <button
+                          type="button"
+                          className="text-button"
+                          onClick={() => {
+                            setEditingHolidayId(holiday.id)
+                            setNewHolidayDate(holiday.holiday_date)
+                            setNewHolidayName(holiday.holiday_name)
+                          }}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          className="text-button danger"
+                          onClick={() => void handleDeleteHoliday(holiday)}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="empty-holidays">No holidays added yet.</p>
               )}
-            </tbody>
-          </table>
-        </div>
-      </section>
+            </section>
+          )}
+        </aside>
+      </div>
 
       {selectedTicket && (
         <aside
@@ -1219,6 +1396,7 @@ async function handleUpdateTicketDetails(
       </option>
     ))}
   </select>
+  
 </label>
           </p>
           <p>
