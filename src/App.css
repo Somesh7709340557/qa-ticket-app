@@ -1490,6 +1490,13 @@ tbody tr:hover { background: #f8fafc; }
   font-size: 11px;
 }
 
+.sla-review-error {
+  margin: 0;
+  color: #b91c1c;
+  font-size: 13px;
+  font-weight: 600;
+}
+
 @media (max-width: 600px) {
   .sla-review-context { grid-template-columns: 1fr; }
   .sla-review-modal { padding: 20px; }

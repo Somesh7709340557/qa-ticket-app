@@ -320,6 +320,7 @@ function App() {
   const [slaReviewSelection, setSlaReviewSelection] =
     useState<'SLA Violated' | 'Within SLA'>('SLA Violated')
   const [slaReviewRemark, setSlaReviewRemark] = useState('')
+  const [slaReviewError, setSlaReviewError] = useState('')
   const [isSavingSlaReview, setIsSavingSlaReview] = useState(false)
   const [ticketDetailsToast, setTicketDetailsToast] = useState<{
     title: string
@@ -1679,12 +1680,18 @@ async function handleDeleteHoliday(holiday: Holiday) {
 
   async function handleSaveSlaReview(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!slaReviewTicket || !slaReviewRemark.trim()) return
+    if (!slaReviewTicket) return
 
+    const remark = slaReviewRemark.trim()
+    if (!remark) {
+      setSlaReviewError('Enter a remark before saving this SLA review.')
+      return
+    }
+
+    setSlaReviewError('')
     setIsSavingSlaReview(true)
     const reviewedSlaOverride =
       slaReviewSelection === 'Within SLA' ? 'Within SLA' : null
-    const remark = slaReviewRemark.trim()
 
     try {
       const { error } = await supabase.rpc('review_ticket_sla', {
@@ -1694,7 +1701,7 @@ async function handleDeleteHoliday(holiday: Holiday) {
       })
 
       if (error) {
-        alert('SLA review could not be saved: ' + error.message)
+        setSlaReviewError('SLA review could not be saved: ' + error.message)
         return
       }
 
@@ -1726,6 +1733,11 @@ async function handleDeleteHoliday(holiday: Holiday) {
       })
       setSlaReviewTicket(null)
       setSlaReviewRemark('')
+    } catch (error) {
+      setSlaReviewError(
+        'SLA review could not be saved: ' +
+          (error instanceof Error ? error.message : 'Please try again.'),
+      )
     } finally {
       setIsSavingSlaReview(false)
     }
@@ -2565,6 +2577,7 @@ async function handleUpdateTicketDetails(
                                 : 'SLA Violated',
                             )
                             setSlaReviewRemark('')
+                            setSlaReviewError('')
                           }}
                         >
                           <span
@@ -2915,23 +2928,33 @@ async function handleUpdateTicketDetails(
                 <select
                   required
                   value={slaReviewSelection}
-                  onChange={(event) =>
+                  onChange={(event) => {
                     setSlaReviewSelection(event.target.value as 'SLA Violated' | 'Within SLA')
-                  }
+                    setSlaReviewError('')
+                  }}
                 >
-                  <option value="SLA Violated">SLA Violated</option>
+                  <option value="SLA Violated">SLA Violated (calculated result)</option>
                   <option value="Within SLA">Within SLA</option>
                 </select>
               </label>
               <label className="ticket-form-field sla-review-note-field">
                 <span>Remark <small>(required)</small></span>
                 <textarea
-                  required
                   rows={4}
                   value={slaReviewRemark}
-                  onChange={(event) => setSlaReviewRemark(event.target.value)}
-                  placeholder="Explain the reason for this SLA review."
+                  aria-describedby="sla-review-guidance"
+                  onChange={(event) => {
+                    setSlaReviewRemark(event.target.value)
+                    setSlaReviewError('')
+                  }}
+                  placeholder="Add a new remark for this review."
                 />
+                <small id="sla-review-guidance">
+                  Choose “SLA Violated (calculated result)” to remove the Within SLA override. Each change needs a new remark.
+                </small>
+                {slaReviewError && (
+                  <p className="sla-review-error" role="alert">{slaReviewError}</p>
+                )}
               </label>
             </div>
 
@@ -2947,7 +2970,7 @@ async function handleUpdateTicketDetails(
               <button
                 className="primary-button"
                 type="submit"
-                disabled={isSavingSlaReview || !slaReviewRemark.trim()}
+                disabled={isSavingSlaReview}
               >
                 {isSavingSlaReview ? 'Saving…' : 'Save review'}
               </button>
