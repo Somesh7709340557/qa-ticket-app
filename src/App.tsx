@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import * as XLSX from 'xlsx'
 import { supabase } from './supabaseClient'
-import Auth from './Auth'
+import Auth, { PasswordRecovery } from './Auth'
 import './App.css'
 import {
   addBusinessHours,
@@ -23,6 +23,10 @@ type Ticket = {
   slaDueAt?: string
   onHoldStartedAt?: string
   resolvedAt?: string
+  reviewedSlaOverride?: 'Within SLA' | null
+  reviewedSlaRemark?: string
+  reviewedSlaAt?: string
+  reviewedSlaBy?: string
 }
 
 type ImportTicketPayload = {
@@ -302,11 +306,21 @@ function mapImportedStatus(value: string): Ticket['status'] | null {
 function App() {
   
   const [session, setSession] = useState<Session | null>(null)
+  const [isPasswordRecovery, setIsPasswordRecovery] = useState(() => {
+    const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''))
+    const queryParams = new URLSearchParams(window.location.search)
+    return hashParams.get('type') === 'recovery' || queryParams.get('type') === 'recovery'
+  })
   const isTicketAdmin =
     session?.user.email?.toLowerCase() === 'ncgtc.support@infoneo.in'
   const [authLoading, setAuthLoading] = useState(true)
 
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null)
+  const [slaReviewTicket, setSlaReviewTicket] = useState<Ticket | null>(null)
+  const [slaReviewSelection, setSlaReviewSelection] =
+    useState<'SLA Violated' | 'Within SLA'>('SLA Violated')
+  const [slaReviewRemark, setSlaReviewRemark] = useState('')
+  const [isSavingSlaReview, setIsSavingSlaReview] = useState(false)
   const [ticketDetailsToast, setTicketDetailsToast] = useState<{
     title: string
     message: string
@@ -345,6 +359,7 @@ const [assignedDateFilter, setAssignedDateFilter] =
   useState<AssignedDateFilter>('all')
   const [assignedDateFrom, setAssignedDateFrom] = useState('')
   const [assignedDateTo, setAssignedDateTo] = useState('')
+  const [slaRiskFilter, setSlaRiskFilter] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
   const [ticketPageSize, setTicketPageSize] = useState(defaultTicketPageSize)
   const [dashboardMetricSelection, setDashboardMetricSelection] =
@@ -377,6 +392,7 @@ const [editingHolidayId, setEditingHolidayId] = useState<string | null>(null)
     assignedDateFilter,
     assignedDateFrom,
     assignedDateTo,
+    slaRiskFilter,
     dashboardMetricSelection?.period,
     dashboardMetricSelection?.key,
     ticketPageSize,
@@ -388,7 +404,7 @@ const [editingHolidayId, setEditingHolidayId] = useState<string | null>(null)
 
     const timeoutId = window.setTimeout(() => {
       setTicketDetailsToast(null)
-    }, 4200)
+    }, 6500)
 
     return () => window.clearTimeout(timeoutId)
   }, [ticketDetailsToast])
@@ -401,7 +417,8 @@ const [editingHolidayId, setEditingHolidayId] = useState<string | null>(null)
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY') setIsPasswordRecovery(true)
       setSession(session)
       setAuthLoading(false)
     })
@@ -479,7 +496,7 @@ useEffect(() => {
       const { data, error } = await supabase
         .from('tickets')
         .select(
-  'id, title, priority, status, scheme, developer, assigned_at, created_at, sla_due_at, on_hold_started_at, resolved_at',
+  'id, title, priority, status, scheme, developer, assigned_at, created_at, sla_due_at, on_hold_started_at, resolved_at, reviewed_sla_override, reviewed_sla_remark, reviewed_sla_at, reviewed_sla_by',
 )
         .order('created_at', { ascending: false })
 
@@ -501,6 +518,10 @@ useEffect(() => {
             slaDueAt: row.sla_due_at ?? undefined,
             onHoldStartedAt: row.on_hold_started_at ?? undefined,
             resolvedAt: row.resolved_at ?? undefined,
+            reviewedSlaOverride: row.reviewed_sla_override as Ticket['reviewedSlaOverride'],
+            reviewedSlaRemark: row.reviewed_sla_remark ?? undefined,
+            reviewedSlaAt: row.reviewed_sla_at ?? undefined,
+            reviewedSlaBy: row.reviewed_sla_by ?? undefined,
             due:
   (row.status === 'On Hold' || row.status === 'Business Pending')
     ? 'Paused'
@@ -724,6 +745,21 @@ setHolidayDates(data.map((row) => row.holiday_date))
     return currentTime > dueTime
   }
 
+  function isSlaAtRisk(ticket: Ticket) {
+    if (
+      !ticket.slaDueAt ||
+      ticket.status === 'Resolved' ||
+      ticket.status === 'On Hold' ||
+      ticket.status === 'Business Pending'
+    ) {
+      return false
+    }
+
+    const dueTime = new Date(ticket.slaDueAt).getTime()
+    const oneHourFromNow = currentTime + 60 * 60 * 1000
+    return Number.isFinite(dueTime) && dueTime >= currentTime && dueTime <= oneHourFromNow
+  }
+
   function getSlaStatusLabel(ticket: Ticket) {
     if (
       ticket.status === 'Resolved' &&
@@ -734,6 +770,10 @@ setHolidayDates(data.map((row) => row.holiday_date))
     if (isSlaViolated(ticket)) return 'SLA Violated'
     if (isWithinSla(ticket)) return 'Within SLA'
     return '—'
+  }
+
+  function getReviewedSlaStatusLabel(ticket: Ticket) {
+    return ticket.reviewedSlaOverride ?? getSlaStatusLabel(ticket)
   }
 
   function matchesMetric(ticket: Ticket, key: DashboardMetricKey) {
@@ -760,6 +800,7 @@ setHolidayDates(data.map((row) => row.holiday_date))
   )
   const todayMetricCounts = getMetricCounts(todayTickets)
   const overallMetricCounts = getMetricCounts(overallTickets)
+  const slaAtRiskCount = tickets.filter(isSlaAtRisk).length
   const hasCustomAssignedDateRange = Boolean(assignedDateFrom || assignedDateTo)
   const assignedDateRangeInvalid = Boolean(
     assignedDateFrom && assignedDateTo && assignedDateFrom > assignedDateTo,
@@ -790,9 +831,11 @@ setHolidayDates(data.map((row) => row.holiday_date))
         : isAssignedDateInFilter(ticket.assignedAt, assignedDateFilter)
     const matchesSelectedMetric =
       !dashboardMetricSelection || matchesMetric(ticket, dashboardMetricSelection.key)
+    const matchesSlaRisk = !slaRiskFilter || isSlaAtRisk(ticket)
 
     return matchesSearch && matchesStatus && matchesPriority &&
-      matchesScheme && matchesDeveloper && matchesAssignedDate && matchesSelectedMetric
+      matchesScheme && matchesDeveloper && matchesAssignedDate &&
+      matchesSelectedMetric && matchesSlaRisk
   })
 
   const totalTicketPages = Math.max(1, Math.ceil(filteredTickets.length / ticketPageSize))
@@ -843,44 +886,57 @@ setHolidayDates(data.map((row) => row.holiday_date))
     )
   }
 
-  function renderMetricPanel(
-    period: DashboardMetricPeriod,
-    title: string,
-    counts: DashboardMetricCounts,
-  ) {
-    return (
-      <section className="metric-panel" aria-label={title}>
-        <h2>{title}</h2>
-        <div className="metric-list">
-          {dashboardMetricDefinitions.map((metric) => {
-            const selected =
-              dashboardMetricSelection?.period === period &&
-              dashboardMetricSelection.key === metric.key
+  function renderMetricComparisonPanel() {
+    const periods: { period: DashboardMetricPeriod; label: string; counts: DashboardMetricCounts }[] = [
+      { period: 'today', label: "Today's", counts: todayMetricCounts },
+      { period: 'overall', label: 'Overall', counts: overallMetricCounts },
+    ]
 
-            return (
-              <button
-                key={metric.key}
-                type="button"
-                className={`metric-button${selected ? ' selected' : ''}`}
-                aria-pressed={selected}
-                onClick={() => {
-                  if (period === 'today') {
-                    setAssignedDateFilter('all')
-                    setAssignedDateFrom('')
-                    setAssignedDateTo('')
-                  }
-                  setDashboardMetricSelection((current) =>
-                    current?.period === period && current.key === metric.key
-                      ? null
-                      : { period, key: metric.key },
-                  )
-                }}
-              >
-                <span>{metric.label}</span>
-                <strong>{counts[metric.key]}</strong>
-              </button>
-            )
-          })}
+    return (
+      <section className="metric-panel metric-comparison-panel" aria-label="Ticket summary">
+        <h2>Ticket summary</h2>
+        <div className="metric-comparison-grid">
+          <div className="metric-comparison-header" aria-hidden="true">
+            <span>Metric</span>
+            <span>Today</span>
+            <span>Overall</span>
+          </div>
+          {dashboardMetricDefinitions.map((metric) => (
+            <div className="metric-comparison-row" key={metric.key}>
+              <span className="metric-comparison-label">{metric.label}</span>
+              {periods.map(({ period, label, counts }) => {
+                const selected =
+                  dashboardMetricSelection?.period === period &&
+                  dashboardMetricSelection.key === metric.key
+                const count = counts[metric.key]
+
+                return (
+                  <button
+                    key={period}
+                    type="button"
+                    className={`metric-button metric-comparison-value${selected ? ' selected' : ''}`}
+                    aria-label={`${label} ${metric.label}: ${count}`}
+                    aria-pressed={selected}
+                    title="Click to filter tickets"
+                    onClick={() => {
+                      if (period === 'today') {
+                        setAssignedDateFilter('all')
+                        setAssignedDateFrom('')
+                        setAssignedDateTo('')
+                      }
+                      setDashboardMetricSelection((current) =>
+                        current?.period === period && current.key === metric.key
+                          ? null
+                          : { period, key: metric.key },
+                      )
+                    }}
+                  >
+                    <strong>{count}</strong>
+                  </button>
+                )
+              })}
+            </div>
+          ))}
         </div>
       </section>
     )
@@ -896,6 +952,7 @@ setHolidayDates(data.map((row) => row.holiday_date))
     setAssignedDateFilter('all')
     setAssignedDateFrom('')
     setAssignedDateTo('')
+    setSlaRiskFilter(false)
   }
 
   async function handleAddHoliday(event: FormEvent<HTMLFormElement>) {
@@ -1240,7 +1297,7 @@ async function handleDeleteHoliday(holiday: Holiday) {
   }
 
   async function handleImportFileSelection(file: File | undefined) {
-    if (!isTicketAdmin || !file) return
+    if (!file) return
 
     setImportFileName(file.name)
     setImportError('')
@@ -1276,11 +1333,6 @@ async function handleDeleteHoliday(holiday: Holiday) {
 
       const normalizeHeader = (value: unknown) =>
         String(value ?? '').replace(/^\uFEFF/, '').trim().toLowerCase()
-      const headerIndexes = new Map<string, number>(
-        (matrix[0] ?? []).map(
-          (header, index): [string, number] => [normalizeHeader(header), index],
-        ),
-      )
       const requiredHeaders = [
         'ticket id',
         'scheme',
@@ -1290,13 +1342,42 @@ async function handleDeleteHoliday(holiday: Holiday) {
         'request status',
         'assigned time',
       ]
-      const missingHeaders = requiredHeaders.filter(
-        (header) => !headerIndexes.has(header),
-      )
-      if (missingHeaders.length > 0) {
-        setImportError(`Missing column${missingHeaders.length === 1 ? '' : 's'}: ${missingHeaders.join(', ')}.`)
+      const headerSearchLimit = Math.min(matrix.length, 25)
+      const headerRowIndex = matrix
+        .slice(0, headerSearchLimit)
+        .findIndex((row) => {
+          const normalizedHeaders = new Set(row.map(normalizeHeader))
+          return requiredHeaders.every((header) => normalizedHeaders.has(header))
+        })
+
+      if (headerRowIndex < 0) {
+        const bestHeaderRow = matrix
+          .slice(0, headerSearchLimit)
+          .map((row, index) => ({
+            index,
+            headers: new Set(row.map(normalizeHeader)),
+          }))
+          .sort((left, right) =>
+            requiredHeaders.filter((header) => right.headers.has(header)).length -
+            requiredHeaders.filter((header) => left.headers.has(header)).length,
+          )[0]
+        const missingHeaders = requiredHeaders.filter(
+          (header) => !bestHeaderRow?.headers.has(header),
+        )
+
+        setImportError(
+          bestHeaderRow && missingHeaders.length < requiredHeaders.length
+            ? `Could not find all required columns in the first ${headerSearchLimit} rows. The closest header row is row ${bestHeaderRow.index + 1}; missing: ${missingHeaders.join(', ')}.`
+            : `Could not find the required header row in the first ${headerSearchLimit} rows. Expected: ${requiredHeaders.join(', ')}.`,
+        )
         return
       }
+
+      const headerIndexes = new Map<string, number>(
+        (matrix[headerRowIndex] ?? []).map(
+          (header, index): [string, number] => [normalizeHeader(header), index],
+        ),
+      )
 
       const getCell = (row: unknown[], header: string) => {
         const index = headerIndexes.get(header)
@@ -1306,10 +1387,10 @@ async function handleDeleteHoliday(holiday: Holiday) {
       const seenIds = new Set<string>()
       const parsedPreview: ImportPreviewRow[] = []
 
-      matrix.slice(1).forEach((row, index) => {
+      matrix.slice(headerRowIndex + 1).forEach((row, index) => {
         if (row.every((cell) => String(cell ?? '').trim() === '')) return
 
-        const rowNumber = index + 2
+        const rowNumber = index + headerRowIndex + 2
         const rawId = getCell(row, 'ticket id')
         const ticketId = typeof rawId === 'number' && Number.isFinite(rawId)
           ? String(Math.trunc(rawId))
@@ -1412,7 +1493,7 @@ async function handleDeleteHoliday(holiday: Holiday) {
   }
 
   async function handleImportTickets() {
-    if (!isTicketAdmin || isImporting) return
+    if (isImporting) return
 
     const rowsToImport = importPreview.filter(
       (row) => row.ticket && row.errors.length === 0 && !row.duplicate,
@@ -1532,6 +1613,8 @@ async function handleDeleteHoliday(holiday: Holiday) {
         : '',
       'SLA due': ticket.due || '',
       'SLA result': getSlaStatusLabel(ticket),
+      'Reviewed SLA': getReviewedSlaStatusLabel(ticket),
+      Remark: ticket.reviewedSlaRemark || '',
       'Remark history': (remarkHistoryByTicket[ticket.id] ?? []).join('\n'),
     }))
 
@@ -1546,6 +1629,8 @@ async function handleDeleteHoliday(holiday: Holiday) {
       { wch: 24 },
       { wch: 24 },
       { wch: 18 },
+      { wch: 20 },
+      { wch: 48 },
       { wch: 48 },
     ]
 
@@ -1590,6 +1675,60 @@ async function handleDeleteHoliday(holiday: Holiday) {
     }))
 
     setNewRemark('')
+  }
+
+  async function handleSaveSlaReview(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!slaReviewTicket || !slaReviewRemark.trim()) return
+
+    setIsSavingSlaReview(true)
+    const reviewedSlaOverride =
+      slaReviewSelection === 'Within SLA' ? 'Within SLA' : null
+    const remark = slaReviewRemark.trim()
+
+    try {
+      const { error } = await supabase.rpc('review_ticket_sla', {
+        p_ticket_id: slaReviewTicket.id,
+        p_reviewed_sla_override: reviewedSlaOverride,
+        p_remark: remark,
+      })
+
+      if (error) {
+        alert('SLA review could not be saved: ' + error.message)
+        return
+      }
+
+      const reviewedAt = new Date().toISOString()
+      const reviewer = session?.user.email ?? ''
+      const updatedTicket: Ticket = {
+        ...slaReviewTicket,
+        reviewedSlaOverride,
+        reviewedSlaRemark: remark,
+        reviewedSlaAt: reviewedAt,
+        reviewedSlaBy: reviewer,
+      }
+
+      setTickets((current) =>
+        current.map((ticket) =>
+          ticket.id === updatedTicket.id ? updatedTicket : ticket,
+        ),
+      )
+      setRemarksByTicket((current) => ({
+        ...current,
+        [updatedTicket.id]: [
+          ...(current[updatedTicket.id] ?? []),
+          formatDateTime(reviewedAt) + ' — SLA review: ' + slaReviewSelection + '. ' + remark,
+        ],
+      }))
+      setTicketDetailsToast({
+        title: 'SLA review saved',
+        message: updatedTicket.id + ' reviewed as ' + slaReviewSelection + '.',
+      })
+      setSlaReviewTicket(null)
+      setSlaReviewRemark('')
+    } finally {
+      setIsSavingSlaReview(false)
+    }
   }
 
   async function handleStatusChange(newStatus: Ticket['status']) {
@@ -1785,6 +1924,10 @@ async function handleUpdateTicketDetails(
   if (priority !== selectedTicket.priority) changedFields.push('Priority')
 
   if (changedFields.length === 0) {
+    setTicketDetailsToast({
+      title: 'No changes to save',
+      message: 'The ticket details are already up to date.',
+    })
     return
   }
 
@@ -1905,6 +2048,17 @@ async function handleUpdateTicketDetails(
     return <p>Loading…</p>
   }
 
+  if (isPasswordRecovery && session) {
+    return (
+      <PasswordRecovery
+        onComplete={() => {
+          setIsPasswordRecovery(false)
+          window.history.replaceState(null, '', window.location.pathname)
+        }}
+      />
+    )
+  }
+
   if (!session) {
     return <Auth />
   }
@@ -1948,20 +2102,18 @@ async function handleUpdateTicketDetails(
   >
     ＋ New ticket
   </button>
-  {isTicketAdmin && (
-    <button
-      className="secondary-button import-open-button"
-      type="button"
-      onClick={() => {
-        setImportError('')
-        setImportPreview([])
-        setImportFileName('')
-        setIsImportOpen(true)
-      }}
-    >
-      ⇧ Import Excel
-    </button>
-  )}
+  <button
+    className="secondary-button import-open-button"
+    type="button"
+    onClick={() => {
+      setImportError('')
+      setImportPreview([])
+      setImportFileName('')
+      setIsImportOpen(true)
+    }}
+  >
+    ⇧ Import Excel
+  </button>
   <button
     className="secondary-button export-open-button"
     type="button"
@@ -1992,8 +2144,219 @@ async function handleUpdateTicketDetails(
 
       <div className="dashboard-layout">
         <aside className="dashboard-left">
-          {renderMetricPanel('today', "Today's count", todayMetricCounts)}
-          {renderMetricPanel('overall', 'Overall ticket count', overallMetricCounts)}
+          {renderMetricComparisonPanel()}
+          <aside className="dashboard-right">
+            <section className="date-filter-panel">
+              <div className="assigned-date-range">
+                <label>
+                  From
+                  <input
+                    type="date"
+                    aria-label="Assigned date from"
+                    value={assignedDateFrom}
+                    max={assignedDateTo || undefined}
+                    onChange={(event) => {
+                      setAssignedDateFrom(event.target.value)
+                      setAssignedDateFilter('all')
+                      setDashboardMetricSelection((current) =>
+                        current?.period === 'today' ? null : current,
+                      )
+                    }}
+                  />
+                </label>
+                <label>
+                  To
+                  <input
+                    type="date"
+                    aria-label="Assigned date to"
+                    value={assignedDateTo}
+                    min={assignedDateFrom || undefined}
+                    onChange={(event) => {
+                      setAssignedDateTo(event.target.value)
+                      setAssignedDateFilter('all')
+                      setDashboardMetricSelection((current) =>
+                        current?.period === 'today' ? null : current,
+                      )
+                    }}
+                  />
+                </label>
+              </div>
+              {assignedDateRangeInvalid && (
+                <p className="assigned-date-range-error">From date must be on or before To date.</p>
+              )}
+              <h2>Filter by assigned date</h2>
+              <div className="date-filter-list">
+                {assignedDateOptions.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={`date-filter-button${!hasCustomAssignedDateRange && assignedDateFilter === option.value ? ' selected' : ''}`}
+                    aria-pressed={!hasCustomAssignedDateRange && assignedDateFilter === option.value}
+                    onClick={() => {
+                      setAssignedDateFrom('')
+                      setAssignedDateTo('')
+                      setAssignedDateFilter(option.value)
+                      setDashboardMetricSelection((current) =>
+                        current?.period === 'today' ? null : current,
+                      )
+                    }}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </section>
+
+            <section className="holiday-panel">
+              <h2>Holiday calendar</h2>
+              <p>Holidays are excluded from SLA calculations.</p>
+              {isTicketAdmin && (
+                <form onSubmit={handleAddHoliday} className="holiday-form">
+                  <label>
+                    Holiday date
+                    <input
+                      type="date"
+                      required
+                      value={newHolidayDate}
+                      onChange={(event) => setNewHolidayDate(event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    Holiday name
+                    <input
+                      required
+                      value={newHolidayName}
+                      onChange={(event) => setNewHolidayName(event.target.value)}
+                      placeholder="Holiday name"
+                    />
+                  </label>
+                  {editingHolidayId && (
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => {
+                        setEditingHolidayId(null)
+                        setNewHolidayDate('')
+                        setNewHolidayName('')
+                      }}
+                    >
+                      Cancel edit
+                    </button>
+                  )}
+                  <button className="primary-button holiday-submit" type="submit">
+                    {editingHolidayId ? 'Save changes' : 'Add holiday'}
+                  </button>
+                </form>
+              )}
+
+              {holidays.length > 0 ? (
+                <ul className="holiday-list">
+                  {holidays.map((holiday) => (
+                    <li key={holiday.id}>
+                      <span>
+                        {holiday.holiday_date.split('-').reverse().join('/')} — {holiday.holiday_name}
+                      </span>
+                      {isTicketAdmin && (
+                        <div>
+                          <button
+                            type="button"
+                            className="text-button"
+                            onClick={() => {
+                              setEditingHolidayId(holiday.id)
+                              setNewHolidayDate(holiday.holiday_date)
+                              setNewHolidayName(holiday.holiday_name)
+                            }}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            className="text-button danger"
+                            onClick={() => void handleDeleteHoliday(holiday)}
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="empty-holidays">
+                  {isTicketAdmin ? 'No holidays added yet.' : 'No holidays are currently listed.'}
+                </p>
+              )}
+            </section>
+
+            {isTicketAdmin && (
+              <section className="developer-admin-panel">
+                <h2>Developer list</h2>
+                <p>Manage names available for new tickets and assignments. Changes here do not rewrite existing tickets.</p>
+                {developerListReady ? (
+                  <>
+                    <form onSubmit={handleSaveDeveloper} className="developer-admin-form">
+                      <label>
+                        {editingDeveloperId ? 'Replace developer name' : 'Add a developer'}
+                        <input
+                          required
+                          value={developerDraft}
+                          onChange={(event) => setDeveloperDraft(event.target.value)}
+                          placeholder="Developer name"
+                        />
+                      </label>
+                      <button className="primary-button holiday-submit" type="submit">
+                        {editingDeveloperId ? 'Save replacement' : 'Add developer'}
+                      </button>
+                      {editingDeveloperId && (
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          onClick={() => {
+                            setEditingDeveloperId(null)
+                            setDeveloperDraft('')
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      )}
+                    </form>
+                    {developers.length > 0 ? (
+                      <ul className="developer-admin-list">
+                        {developers.map((developer) => (
+                          <li key={developer.id}>
+                            <span>{developer.name}</span>
+                            <div>
+                              <button
+                                type="button"
+                                className="text-button"
+                                onClick={() => {
+                                  setEditingDeveloperId(developer.id)
+                                  setDeveloperDraft(developer.name)
+                                }}
+                              >
+                                Replace
+                              </button>
+                              <button
+                                type="button"
+                                className="text-button danger"
+                                onClick={() => void handleRemoveDeveloper(developer)}
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="empty-holidays">No developers are listed yet.</p>
+                    )}
+                  </>
+                ) : (
+                  <p className="empty-holidays">Run the developer list setup in Supabase once to enable management.</p>
+                )}
+              </section>
+            )}
+          </aside>
         </aside>
 
         <section className="ticket-section dashboard-tickets">
@@ -2046,6 +2409,16 @@ async function handleUpdateTicketDetails(
                   <option key={developer} value={developer}>{developer}</option>
                 ))}
               </select>
+              <button
+                type="button"
+                className="sla-risk-filter-button"
+                aria-label="Filter tickets with SLA due within one hour"
+                aria-pressed={slaRiskFilter}
+                title="Show open or in-progress tickets due within the next hour"
+                onClick={() => setSlaRiskFilter((active) => !active)}
+              >
+                SLA at risk <span>{slaAtRiskCount}</span>
+              </button>
               <input
                 aria-label="Search tickets"
                 placeholder="Search tickets…"
@@ -2081,7 +2454,7 @@ async function handleUpdateTicketDetails(
           {(dashboardMetricSelection || searchTerm || statusFilter !== 'All' ||
             priorityFilter !== 'All' || schemeFilter !== 'All' ||
             developerFilter !== 'All' || assignedDateFilter !== 'all' ||
-            assignedDateFrom || assignedDateTo) && (
+            assignedDateFrom || assignedDateTo || slaRiskFilter) && (
             <div className="active-filter-row">
               <span>{filteredTickets.length} matching ticket{filteredTickets.length === 1 ? '' : 's'}</span>
               <button type="button" onClick={clearDashboardFilters}>Clear filters</button>
@@ -2110,6 +2483,9 @@ async function handleUpdateTicketDetails(
                   <th>Resolved time</th>
                   <th>SLA due</th>
                   <th>SLA violated</th>
+                  <th>Status</th>
+                  <th>Reviewed SLA</th>
+                  <th>Remark</th>
                 </tr>
               </thead>
               <tbody>
@@ -2157,19 +2533,69 @@ async function handleUpdateTicketDetails(
                     <td>{ticket.due}</td>
                     <td>
                       <span
-                        className={`sla-status ${getSlaStatusLabel(ticket) === 'Within SLA'
+                        className={"sla-status " + (getSlaStatusLabel(ticket) === 'Within SLA'
                           ? 'within'
                           : getSlaStatusLabel(ticket) === 'SLA Violated'
                             ? 'violated'
-                            : 'unknown'}`}
+                            : 'unknown')}
                       >
                         {getSlaStatusLabel(ticket)}
                       </span>
                     </td>
+                    <td><span className="status">{ticket.status}</span></td>
+                    <td>
+                      {getSlaStatusLabel(ticket) === 'SLA Violated' ||
+                      ticket.reviewedSlaOverride === 'Within SLA' ? (
+                        <button
+                          type="button"
+                          className="sla-review-trigger"
+                          aria-label={'Review SLA for ' + ticket.id}
+                          title={
+                            ticket.reviewedSlaAt
+                              ? 'Last reviewed ' + formatDateTime(ticket.reviewedSlaAt) +
+                                (ticket.reviewedSlaBy ? ' by ' + ticket.reviewedSlaBy : '')
+                              : 'Review this SLA result and add a remark'
+                          }
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            setSlaReviewTicket(ticket)
+                            setSlaReviewSelection(
+                              getReviewedSlaStatusLabel(ticket) === 'Within SLA'
+                                ? 'Within SLA'
+                                : 'SLA Violated',
+                            )
+                            setSlaReviewRemark('')
+                          }}
+                        >
+                          <span
+                            className={"sla-status " + (getReviewedSlaStatusLabel(ticket) === 'Within SLA'
+                              ? 'within'
+                              : 'violated')}
+                          >
+                            {getReviewedSlaStatusLabel(ticket)}
+                          </span>
+                          <small>{ticket.reviewedSlaOverride ? 'Edit review' : 'Review'}</small>
+                        </button>
+                      ) : (
+                        <span
+                          className={"sla-status " + (getReviewedSlaStatusLabel(ticket) === 'Within SLA'
+                            ? 'within'
+                            : 'unknown')}
+                        >
+                          {getReviewedSlaStatusLabel(ticket)}
+                        </span>
+                      )}
+                    </td>
+                    <td
+                      className="review-remark-cell"
+                      title={ticket.reviewedSlaRemark || ''}
+                    >
+                      {ticket.reviewedSlaRemark || '—'}
+                    </td>
                   </tr>
                 ))}
                 {filteredTickets.length === 0 && (
-                  <tr><td colSpan={isTicketAdmin ? 9 : 8}>No tickets match the selected filters.</td></tr>
+                  <tr><td colSpan={isTicketAdmin ? 12 : 11}>No tickets match the selected filters.</td></tr>
                 )}
               </tbody>
             </table>
@@ -2213,218 +2639,7 @@ async function handleUpdateTicketDetails(
           )}
         </section>
 
-        <aside className="dashboard-right">
-          <section className="date-filter-panel">
-            <div className="assigned-date-range">
-              <label>
-                From
-                <input
-                  type="date"
-                  aria-label="Assigned date from"
-                  value={assignedDateFrom}
-                  max={assignedDateTo || undefined}
-                  onChange={(event) => {
-                    setAssignedDateFrom(event.target.value)
-                    setAssignedDateFilter('all')
-                    setDashboardMetricSelection((current) =>
-                      current?.period === 'today' ? null : current,
-                    )
-                  }}
-                />
-              </label>
-              <label>
-                To
-                <input
-                  type="date"
-                  aria-label="Assigned date to"
-                  value={assignedDateTo}
-                  min={assignedDateFrom || undefined}
-                  onChange={(event) => {
-                    setAssignedDateTo(event.target.value)
-                    setAssignedDateFilter('all')
-                    setDashboardMetricSelection((current) =>
-                      current?.period === 'today' ? null : current,
-                    )
-                  }}
-                />
-              </label>
-            </div>
-            {assignedDateRangeInvalid && (
-              <p className="assigned-date-range-error">From date must be on or before To date.</p>
-            )}
-            <h2>Filter by assigned date</h2>
-            <div className="date-filter-list">
-              {assignedDateOptions.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  className={`date-filter-button${!hasCustomAssignedDateRange && assignedDateFilter === option.value ? ' selected' : ''}`}
-                  aria-pressed={!hasCustomAssignedDateRange && assignedDateFilter === option.value}
-                  onClick={() => {
-                    setAssignedDateFrom('')
-                    setAssignedDateTo('')
-                    setAssignedDateFilter(option.value)
-                    setDashboardMetricSelection((current) =>
-                      current?.period === 'today' ? null : current,
-                    )
-                  }}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-          </section>
 
-          <section className="holiday-panel">
-            <h2>Holiday calendar</h2>
-            <p>Holidays are excluded from SLA calculations.</p>
-            {isTicketAdmin && (
-              <form onSubmit={handleAddHoliday} className="holiday-form">
-                <label>
-                  Holiday date
-                  <input
-                    type="date"
-                    required
-                    value={newHolidayDate}
-                    onChange={(event) => setNewHolidayDate(event.target.value)}
-                  />
-                </label>
-                <label>
-                  Holiday name
-                  <input
-                    required
-                    value={newHolidayName}
-                    onChange={(event) => setNewHolidayName(event.target.value)}
-                    placeholder="Holiday name"
-                  />
-                </label>
-                {editingHolidayId && (
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    onClick={() => {
-                      setEditingHolidayId(null)
-                      setNewHolidayDate('')
-                      setNewHolidayName('')
-                    }}
-                  >
-                    Cancel edit
-                  </button>
-                )}
-                <button className="primary-button holiday-submit" type="submit">
-                  {editingHolidayId ? 'Save changes' : 'Add holiday'}
-                </button>
-              </form>
-            )}
-
-            {holidays.length > 0 ? (
-              <ul className="holiday-list">
-                {holidays.map((holiday) => (
-                  <li key={holiday.id}>
-                    <span>
-                      {holiday.holiday_date.split('-').reverse().join('/')} — {holiday.holiday_name}
-                    </span>
-                    {isTicketAdmin && (
-                      <div>
-                        <button
-                          type="button"
-                          className="text-button"
-                          onClick={() => {
-                            setEditingHolidayId(holiday.id)
-                            setNewHolidayDate(holiday.holiday_date)
-                            setNewHolidayName(holiday.holiday_name)
-                          }}
-                        >
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          className="text-button danger"
-                          onClick={() => void handleDeleteHoliday(holiday)}
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="empty-holidays">
-                {isTicketAdmin ? 'No holidays added yet.' : 'No holidays are currently listed.'}
-              </p>
-            )}
-          </section>
-
-          {isTicketAdmin && (
-            <section className="developer-admin-panel">
-              <h2>Developer list</h2>
-              <p>Manage names available for new tickets and assignments. Changes here do not rewrite existing tickets.</p>
-              {developerListReady ? (
-                <>
-                  <form onSubmit={handleSaveDeveloper} className="developer-admin-form">
-                    <label>
-                      {editingDeveloperId ? 'Replace developer name' : 'Add a developer'}
-                      <input
-                        required
-                        value={developerDraft}
-                        onChange={(event) => setDeveloperDraft(event.target.value)}
-                        placeholder="Developer name"
-                      />
-                    </label>
-                    <button className="primary-button holiday-submit" type="submit">
-                      {editingDeveloperId ? 'Save replacement' : 'Add developer'}
-                    </button>
-                    {editingDeveloperId && (
-                      <button
-                        type="button"
-                        className="secondary-button"
-                        onClick={() => {
-                          setEditingDeveloperId(null)
-                          setDeveloperDraft('')
-                        }}
-                      >
-                        Cancel
-                      </button>
-                    )}
-                  </form>
-                  {developers.length > 0 ? (
-                    <ul className="developer-admin-list">
-                      {developers.map((developer) => (
-                        <li key={developer.id}>
-                          <span>{developer.name}</span>
-                          <div>
-                            <button
-                              type="button"
-                              className="text-button"
-                              onClick={() => {
-                                setEditingDeveloperId(developer.id)
-                                setDeveloperDraft(developer.name)
-                              }}
-                            >
-                              Replace
-                            </button>
-                            <button
-                              type="button"
-                              className="text-button danger"
-                              onClick={() => void handleRemoveDeveloper(developer)}
-                            >
-                              Remove
-                            </button>
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="empty-holidays">No developers are listed yet.</p>
-                  )}
-                </>
-              ) : (
-                <p className="empty-holidays">Run the developer list setup in Supabase once to enable management.</p>
-              )}
-            </section>
-          )}
-        </aside>
       </div>
 
       {selectedTicket && (
@@ -2454,12 +2669,6 @@ async function handleUpdateTicketDetails(
               </button>
             </div>
 
-            {selectedTicket.title !== selectedTicket.id && (
-              <div className="detail-title-block">
-                <h2 id="ticket-detail-title">{selectedTicket.title}</h2>
-              </div>
-            )}
-
             <div className="detail-overview-grid">
               <div className="detail-ticket-id-card">
                 <span>Ticket ID</span>
@@ -2487,10 +2696,27 @@ async function handleUpdateTicketDetails(
               key={selectedTicket.id}
               onSubmit={handleUpdateTicketDetails}
             >
-              <label className="detail-field">
-                <span>Issue title</span>
-                <input name="title" required defaultValue={selectedTicket.title} />
-              </label>
+              <div className="detail-form-row detail-title-developer-row">
+                <label className="detail-field">
+                  <span>Issue title</span>
+                  <input name="title" required defaultValue={selectedTicket.title} />
+                </label>
+
+                <label className="detail-field">
+                  <span>Developer</span>
+                  <select
+                    value={selectedTicket.developer}
+                    onChange={(event) => void handleDeveloperChange(event.target.value)}
+                  >
+                    <option value="">Select a developer</option>
+                    {availableDeveloperOptions.map((developer) => (
+                      <option key={developer} value={developer}>
+                        {developer}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
 
               <div className="detail-form-row">
                 <label className="detail-field">
@@ -2520,21 +2746,6 @@ async function handleUpdateTicketDetails(
                 Save details
               </button>
             </form>
-
-            <label className="detail-field detail-developer-field">
-              <span>Developer</span>
-              <select
-                value={selectedTicket.developer}
-                onChange={(event) => void handleDeveloperChange(event.target.value)}
-              >
-                <option value="">Select a developer</option>
-                {availableDeveloperOptions.map((developer) => (
-                  <option key={developer} value={developer}>
-                    {developer}
-                  </option>
-                ))}
-              </select>
-            </label>
 
             {isTicketAdmin && (
               <form
@@ -2659,7 +2870,93 @@ async function handleUpdateTicketDetails(
         </div>
       )}
 
-      {isImportOpen && isTicketAdmin && (
+      {slaReviewTicket && (
+        <div
+          className="ticket-modal-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !isSavingSlaReview) {
+              setSlaReviewTicket(null)
+            }
+          }}
+        >
+          <form
+            className="ticket-create-modal sla-review-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="sla-review-title"
+            onSubmit={handleSaveSlaReview}
+          >
+            <div className="create-modal-header">
+              <div className="create-modal-icon" aria-hidden="true">✓</div>
+              <div>
+                <p className="eyebrow">Billing review</p>
+                <h2 id="sla-review-title">Review SLA</h2>
+                <p>The original SLA result stays unchanged. This reviewed result is tracked separately.</p>
+              </div>
+              <button
+                className="icon-close-button"
+                type="button"
+                aria-label="Close SLA review"
+                disabled={isSavingSlaReview}
+                onClick={() => setSlaReviewTicket(null)}
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="sla-review-context">
+              <div><span>Ticket</span><strong>{slaReviewTicket.id}</strong></div>
+              <div><span>Calculated SLA</span><strong>{getSlaStatusLabel(slaReviewTicket)}</strong></div>
+            </div>
+
+            <div className="ticket-form-fields sla-review-fields">
+              <label className="ticket-form-field">
+                <span>Reviewed SLA</span>
+                <select
+                  required
+                  value={slaReviewSelection}
+                  onChange={(event) =>
+                    setSlaReviewSelection(event.target.value as 'SLA Violated' | 'Within SLA')
+                  }
+                >
+                  <option value="SLA Violated">SLA Violated</option>
+                  <option value="Within SLA">Within SLA</option>
+                </select>
+              </label>
+              <label className="ticket-form-field sla-review-note-field">
+                <span>Remark <small>(required)</small></span>
+                <textarea
+                  required
+                  rows={4}
+                  value={slaReviewRemark}
+                  onChange={(event) => setSlaReviewRemark(event.target.value)}
+                  placeholder="Explain the reason for this SLA review."
+                />
+              </label>
+            </div>
+
+            <div className="ticket-create-actions">
+              <button
+                className="secondary-button"
+                type="button"
+                disabled={isSavingSlaReview}
+                onClick={() => setSlaReviewTicket(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className="primary-button"
+                type="submit"
+                disabled={isSavingSlaReview || !slaReviewRemark.trim()}
+              >
+                {isSavingSlaReview ? 'Saving…' : 'Save review'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {isImportOpen && (
         <div
           className="ticket-modal-backdrop"
           onMouseDown={(event) => {
@@ -2677,7 +2974,7 @@ async function handleUpdateTicketDetails(
             <div className="create-modal-header">
               <div className="create-modal-icon" aria-hidden="true">⇧</div>
               <div>
-                <p className="eyebrow">Admin tool</p>
+                <p className="eyebrow">Ticket data</p>
                 <h2 id="import-tickets-title">Import past tickets</h2>
                 <p>Choose the workbook and review every row before adding anything.</p>
               </div>

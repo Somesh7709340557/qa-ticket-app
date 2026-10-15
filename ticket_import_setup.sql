@@ -136,11 +136,6 @@ security definer
 set search_path = ''
 as $$
 begin
-  if lower(coalesce(auth.jwt() ->> 'email', '')) <> 'ncgtc.support@infoneo.in' then
-    raise exception 'Only the ticket administrator can import tickets.'
-      using errcode = '42501';
-  end if;
-
   if p_tickets is null or jsonb_typeof(p_tickets) <> 'array' then
     raise exception 'The ticket import must be a JSON array.'
       using errcode = '22023';

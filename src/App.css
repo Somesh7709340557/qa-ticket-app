@@ -92,7 +92,7 @@
 
 .dashboard-layout {
   display: grid;
-  grid-template-columns: 210px minmax(0, 1fr) 245px;
+  grid-template-columns: 245px minmax(0, 1fr);
   align-items: start;
   gap: 16px;
 }
@@ -104,6 +104,16 @@
   min-width: 0;
 }
 
+.dashboard-left {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.dashboard-right {
+  grid-column: auto;
+  grid-row: auto;
+  grid-template-columns: 1fr;
+}
 .metric-panel,
 .date-filter-panel,
 .holiday-panel,
@@ -162,6 +172,56 @@
   font-size: 15px;
 }
 
+
+.metric-comparison-grid { display: grid; gap: 3px; }
+
+.metric-comparison-header,
+.metric-comparison-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 52px 56px;
+  align-items: center;
+  gap: 6px;
+}
+
+.metric-comparison-header {
+  padding: 0 1px 8px;
+  border-bottom: 1px solid #e2e8f0;
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.metric-comparison-header span:not(:first-child) { text-align: center; }
+
+.metric-comparison-row {
+  min-height: 36px;
+  border-bottom: 1px solid #eef2f7;
+}
+
+.metric-comparison-row:last-child { border-bottom: 0; }
+
+.metric-comparison-label {
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.metric-comparison-grid .metric-button {
+  min-height: 28px;
+  justify-content: center;
+  padding: 5px 4px;
+  text-align: center;
+  font-size: 12px;
+}
+
+.metric-comparison-grid .metric-button strong {
+  min-width: 0;
+  font-size: 13px;
+}
+
+.metric-comparison-grid .metric-button:hover { transform: translateY(-1px); }
 .metric-button.selected {
   border-color: #6366f1;
   background: #eef2ff;
@@ -169,6 +229,8 @@
 }
 
 .dashboard-tickets {
+  grid-column: 2;
+  grid-row: 1;
   min-width: 0;
   overflow: hidden;
 }
@@ -212,6 +274,42 @@
 
 .ticket-controls select { max-width: 150px; }
 .ticket-controls input { width: min(210px, 100%); }
+
+.sla-risk-filter-button {
+  display: inline-flex;
+  min-height: 38px;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid #fcd34d;
+  border-radius: 7px;
+  padding: 8px 10px;
+  background: #fffbeb;
+  color: #92400e;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.sla-risk-filter-button span {
+  display: inline-grid;
+  min-width: 20px;
+  height: 20px;
+  place-items: center;
+  border-radius: 999px;
+  padding: 0 5px;
+  background: #fef3c7;
+  font-size: 11px;
+}
+
+.sla-risk-filter-button:hover,
+.sla-risk-filter-button[aria-pressed="true"] {
+  border-color: #f59e0b;
+  background: #fef3c7;
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.12);
+}
 
 .active-filter-row {
   display: flex;
@@ -472,11 +570,10 @@ tbody tr:hover { background: #f8fafc; }
 }
 
 @media (max-width: 1250px) {
-  .dashboard-layout { grid-template-columns: 190px minmax(0, 1fr); }
-  .dashboard-right {
-    grid-column: 1 / -1;
-    grid-template-columns: minmax(220px, 0.8fr) minmax(260px, 1.2fr);
-  }
+  .dashboard-layout { grid-template-columns: 230px minmax(0, 1fr); }
+  .dashboard-left { grid-column: 1; grid-row: 1; }
+  .dashboard-right { grid-column: auto; grid-row: auto; grid-template-columns: 1fr; }
+  .dashboard-tickets { grid-column: 2; grid-row: 1; }
   .ticket-controls { justify-content: flex-start; }
   .tickets-heading { flex-direction: column; }
 }
@@ -489,14 +586,16 @@ tbody tr:hover { background: #f8fafc; }
   .header-signout-button { grid-row: 2; }
   .topbar h1 { font-size: 25px; }
   .dashboard-layout { grid-template-columns: 1fr; }
-  .dashboard-left { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .dashboard-right { grid-column: auto; grid-template-columns: 1fr; }
+  .dashboard-left { grid-column: 1; grid-row: 1; grid-template-columns: 1fr; }
+  .dashboard-right { grid-column: auto; grid-row: auto; grid-template-columns: 1fr; }
+  .dashboard-tickets { grid-column: 1; grid-row: 2; }
   .section-heading { padding: 16px; }
   .pagination-bar { align-items: flex-start; flex-direction: column; padding: 12px 16px; }
   .pagination-controls { justify-content: flex-start; }
   .ticket-controls { width: 100%; }
   .ticket-controls select,
-  .ticket-controls input { flex: 1 1 140px; max-width: none; }
+  .ticket-controls input,
+  .sla-risk-filter-button { flex: 1 1 140px; max-width: none; justify-content: center; }
   th, td { padding: 10px 12px; }
 }
 
@@ -628,10 +727,10 @@ tbody tr:hover { background: #f8fafc; }
 }
 
 .ticket-detail-panel {
-  width: min(100%, 620px);
+  width: min(100%, 660px);
   max-height: min(90vh, 900px);
   overflow-y: auto;
-  padding: 20px 22px 24px;
+  padding: 18px 20px 20px;
   border: 1px solid rgba(226, 232, 240, 0.9);
   border-radius: 20px;
   background: #fff;
@@ -645,7 +744,7 @@ tbody tr:hover { background: #f8fafc; }
   align-items: flex-start;
   justify-content: space-between;
   gap: 20px;
-  padding-bottom: 12px;
+  padding-bottom: 8px;
   border-bottom: 1px solid #e8edf5;
 }
 
@@ -704,14 +803,14 @@ tbody tr:hover { background: #f8fafc; }
 }
 
 .detail-overview-grid {
-  margin-bottom: 12px;
+  margin-bottom: 8px;
 }
 
 .detail-ticket-id-card {
   display: grid;
-  min-height: 64px;
+  min-height: 54px;
   align-content: center;
-  gap: 6px;
+  gap: 4px;
   border: 1px solid #e5eaf2;
   border-radius: 9px;
   padding: 8px 11px;
@@ -735,7 +834,7 @@ tbody tr:hover { background: #f8fafc; }
 .detail-field,
 .ticket-form-field {
   display: grid;
-  gap: 7px;
+  gap: 5px;
   color: #334155;
   font-size: 13px;
   font-weight: 650;
@@ -747,7 +846,7 @@ tbody tr:hover { background: #f8fafc; }
 .ticket-form-field select,
 .detail-remark-input {
   width: 100%;
-  min-height: 42px;
+  min-height: 38px;
   border: 1px solid #d7deea;
   border-radius: 9px;
   padding: 9px 11px;
@@ -771,17 +870,20 @@ tbody tr:hover { background: #f8fafc; }
 
 .detail-edit-form {
   display: grid;
-  gap: 11px;
-  margin-top: 12px;
+  gap: 8px;
+  margin-top: 8px;
   border-top: 1px solid #e8edf5;
-  padding-top: 12px;
+  padding-top: 10px;
 }
 
-.detail-form-row { gap: 10px; }
+.detail-form-row { gap: 8px; }
+
+.detail-title-developer-row {
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+}
 
 .detail-save-button {
-  min-height: 42px;
-  margin-top: 2px;
+  min-height: 38px;
 }
 
 .admin-ticket-times-form {
@@ -850,7 +952,7 @@ tbody tr:hover { background: #f8fafc; }
   background: linear-gradient(90deg, #22c55e, #86efac);
   content: '';
   transform-origin: left;
-  animation: toast-progress 4.2s linear forwards;
+  animation: toast-progress 6.5s linear forwards;
 }
 
 .save-success-icon {
@@ -1302,4 +1404,93 @@ tbody tr:hover { background: #f8fafc; }
   .detail-form-row,
   .detail-dates,
   .admin-ticket-times-grid { grid-template-columns: 1fr; }
+}
+
+.sla-review-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #4f46e5;
+  font: inherit;
+  cursor: pointer;
+}
+
+.sla-review-trigger small {
+  font-size: 11px;
+  font-weight: 650;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.sla-review-trigger:hover small { color: #3730a3; }
+
+.review-remark-cell {
+  min-width: 160px;
+  max-width: 260px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.sla-review-context {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.sla-review-context > div {
+  display: grid;
+  gap: 5px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 11px 12px;
+  background: #f8fafc;
+}
+
+.sla-review-context span {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.sla-review-context strong {
+  color: #172033;
+  font-size: 13px;
+}
+
+.sla-review-note-field { grid-column: 1 / -1; }
+
+.sla-review-note-field textarea {
+  width: 100%;
+  min-height: 100px;
+  resize: vertical;
+  border: 1px solid #cbd5e1;
+  border-radius: 9px;
+  padding: 11px 12px;
+  color: #172033;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.sla-review-note-field textarea:focus {
+  outline: 3px solid rgba(99, 102, 241, 0.14);
+  border-color: #6366f1;
+}
+
+.sla-review-note-field small {
+  color: #64748b;
+  font-size: 11px;
+}
+
+@media (max-width: 600px) {
+  .sla-review-context { grid-template-columns: 1fr; }
+  .sla-review-modal { padding: 20px; }
 }
