@@ -88,6 +88,7 @@ type DashboardMetricSelection = {
 } | null
 
 type DashboardMetricCounts = Record<DashboardMetricKey, number>
+type ReviewedSlaFilter = 'Within SLA' | 'SLA Violated' | 'Not classified' | null
 
 const dashboardMetricDefinitions: {
   key: DashboardMetricKey
@@ -291,11 +292,52 @@ function parseIndiaTimestamp(value: unknown): string | null {
   return new Date(localAsUtc - 330 * 60_000).toISOString()
 }
 
+const importedSchemeShortForms: Record<string, string> = {
+  emergencycreditlineguaranteeschemeeclgs: 'ECLGS',
+  eclgs: 'ECLGS',
+  creditguaranteefundformicrounitscgfmu: 'CGFMU',
+  cgfmu: 'CGFMU',
+  creditguaranteefundschemeforeducationloanscgfel: 'CGFEL',
+  cgfel: 'CGFEL',
+  fas: 'FAS',
+  creditguaranteeschemeforstandupindiacgssi: 'CGSSI',
+  cgssi: 'CGSSI',
+  creditguaranteeschemeforstartupscgss: 'CGSS',
+  cgss: 'CGSS',
+  common: 'Common',
+  creditguaranteefundschemeforskilldevelopmentloanscgfsd: 'CGFSD',
+  cgfsd: 'CGFSD',
+  creditguaranteeschemeforenwrbasedpledgefinancingcgsnpf: 'NWR - NPF',
+  cgsnpf: 'NWR - NPF',
+  nwrnpf: 'NWR - NPF',
+  creditriskguaranteefundtrustforlowincomehousingcrgftlih: 'CRGFTLIH',
+  crgftlih: 'CRGFTLIH',
+  loanguaranteeschemeforcovidaffectedsectorslgscas: 'LGSCAS',
+  lgscas: 'LGSCAS',
+  mutualcreditguaranteeschemeformsmesmcgsmsme: 'MSME',
+  mcgsmsme: 'MSME',
+  msme: 'MSME',
+  creditguaranteeschemeformfiscgsmfi: 'MFI',
+  cgsmfi: 'MFI',
+  mfi: 'MFI',
+  loanguaranteeschemeforthecovidaffectedtourismservicesectorlgscatss: 'LGSCATSS',
+  lgscatss: 'LGSCATSS',
+  guaranteeschemeforcorporatedebtgscd: 'GSCD',
+  gscd: 'GSCD',
+  other: 'Other',
+  notassigned: 'Common',
+}
+function normalizeImportedScheme(value: string): string {
+  const trimmed = value.trim()
+  const key = trimmed.toLowerCase().replace(/[^a-z0-9]/g, '')
+  return importedSchemeShortForms[key] ?? trimmed
+}
+
 function mapImportedStatus(value: string): Ticket['status'] | null {
   const normalized = value.trim().toLowerCase()
   if (normalized === 'open') return 'Open'
   if (normalized === 'in progress') return 'In Progress'
-  if (normalized === 'on hold') return 'On Hold'
+  if (normalized === 'on hold' || normalized === 'awaiting user response') return 'On Hold'
   if (normalized === 'business pending' || normalized === 'awaiting business response') {
     return 'Business Pending'
   }
@@ -361,6 +403,8 @@ const [assignedDateFilter, setAssignedDateFilter] =
   const [assignedDateFrom, setAssignedDateFrom] = useState('')
   const [assignedDateTo, setAssignedDateTo] = useState('')
   const [slaRiskFilter, setSlaRiskFilter] = useState(false)
+  const [reviewedSlaFilter, setReviewedSlaFilter] =
+    useState<ReviewedSlaFilter>(null)
   const [currentPage, setCurrentPage] = useState(1)
   const [ticketPageSize, setTicketPageSize] = useState(defaultTicketPageSize)
   const [dashboardMetricSelection, setDashboardMetricSelection] =
@@ -394,6 +438,7 @@ const [editingHolidayId, setEditingHolidayId] = useState<string | null>(null)
     assignedDateFrom,
     assignedDateTo,
     slaRiskFilter,
+    reviewedSlaFilter,
     dashboardMetricSelection?.period,
     dashboardMetricSelection?.key,
     ticketPageSize,
@@ -802,6 +847,48 @@ setHolidayDates(data.map((row) => row.holiday_date))
   const todayMetricCounts = getMetricCounts(todayTickets)
   const overallMetricCounts = getMetricCounts(overallTickets)
   const slaAtRiskCount = tickets.filter(isSlaAtRisk).length
+  const serviceLevelTargetPercent = 95
+  const indiaTodayKey = getIndiaDateKey(new Date().toISOString())
+  const penaltyTickets = tickets.filter((ticket) => {
+    const assignedDateKey = getIndiaDateKey(ticket.assignedAt)
+    return !assignedDateKey || assignedDateKey <= indiaTodayKey
+  })
+  const penaltyWithinSlaCount = penaltyTickets.filter(
+    (ticket) =>
+      ticket.status === 'Resolved' &&
+      getReviewedSlaStatusLabel(ticket) === 'Within SLA',
+  ).length
+  const penaltyViolatedCount = penaltyTickets.filter(
+    (ticket) =>
+      ticket.status === 'Resolved' &&
+      getReviewedSlaStatusLabel(ticket) === 'SLA Violated',
+  ).length
+  const penaltyNotClassifiedCount =
+    penaltyTickets.length - penaltyWithinSlaCount - penaltyViolatedCount
+  const penaltyAssignedCount = penaltyTickets.length
+  const penaltyResolvedCount =
+    penaltyAssignedCount - penaltyNotClassifiedCount
+  const penaltyResolutionRate = penaltyResolvedCount > 0
+    ? (penaltyWithinSlaCount / penaltyResolvedCount) * 100
+    : null
+  const penaltyShortfall = penaltyResolutionRate === null
+    ? null
+    : Math.max(0, serviceLevelTargetPercent - penaltyResolutionRate)
+  const penaltyPercent = penaltyShortfall === null
+    ? null
+    : penaltyShortfall === 0
+      ? 0
+      : penaltyShortfall <= 1
+        ? 1
+        : penaltyShortfall <= 3
+          ? 3
+          : penaltyShortfall <= 5
+            ? 5
+            : penaltyShortfall <= 6
+              ? 7
+              : penaltyShortfall <= 8
+                ? 9
+                : 10
   const hasCustomAssignedDateRange = Boolean(assignedDateFrom || assignedDateTo)
   const assignedDateRangeInvalid = Boolean(
     assignedDateFrom && assignedDateTo && assignedDateFrom > assignedDateTo,
@@ -833,10 +920,19 @@ setHolidayDates(data.map((row) => row.holiday_date))
     const matchesSelectedMetric =
       !dashboardMetricSelection || matchesMetric(ticket, dashboardMetricSelection.key)
     const matchesSlaRisk = !slaRiskFilter || isSlaAtRisk(ticket)
+    const reviewedSlaLabel = getReviewedSlaStatusLabel(ticket)
+    const matchesReviewedSla = !reviewedSlaFilter || (
+      reviewedSlaFilter === 'Within SLA'
+        ? ticket.status === 'Resolved' && reviewedSlaLabel === 'Within SLA'
+        : reviewedSlaFilter === 'SLA Violated'
+          ? ticket.status === 'Resolved' && reviewedSlaLabel === 'SLA Violated'
+          : ticket.status !== 'Resolved' ||
+            (reviewedSlaLabel !== 'Within SLA' && reviewedSlaLabel !== 'SLA Violated')
+    )
 
     return matchesSearch && matchesStatus && matchesPriority &&
       matchesScheme && matchesDeveloper && matchesAssignedDate &&
-      matchesSelectedMetric && matchesSlaRisk
+      matchesSelectedMetric && matchesSlaRisk && matchesReviewedSla
   })
 
   const totalTicketPages = Math.max(1, Math.ceil(filteredTickets.length / ticketPageSize))
@@ -954,6 +1050,16 @@ setHolidayDates(data.map((row) => row.holiday_date))
     setAssignedDateFrom('')
     setAssignedDateTo('')
     setSlaRiskFilter(false)
+    setReviewedSlaFilter(null)
+  }
+
+  const selectReviewedSlaFilter = (filter: ReviewedSlaFilter) => {
+    if (filter !== null && reviewedSlaFilter === filter) {
+      clearDashboardFilters()
+      return
+    }
+    clearDashboardFilters()
+    setReviewedSlaFilter(filter)
   }
 
   async function handleAddHoliday(event: FormEvent<HTMLFormElement>) {
@@ -1396,7 +1502,8 @@ async function handleDeleteHoliday(holiday: Holiday) {
         const ticketId = typeof rawId === 'number' && Number.isFinite(rawId)
           ? String(Math.trunc(rawId))
           : String(rawId ?? '').trim()
-        const scheme = String(getCell(row, 'scheme') ?? '').trim()
+        const rawScheme = String(getCell(row, 'scheme') ?? '').trim()
+        const scheme = normalizeImportedScheme(rawScheme)
         const developer = String(getCell(row, 'developer') ?? '').trim()
         const priorityText = String(getCell(row, 'priority') ?? '').trim().toUpperCase()
         const statusText = String(getCell(row, 'request status') ?? '').trim()
@@ -1406,7 +1513,8 @@ async function handleDeleteHoliday(holiday: Holiday) {
         const warnings: string[] = []
 
         if (!ticketId) errors.push('Ticket ID is missing')
-        if (!scheme) errors.push('Scheme is missing')
+        if (!rawScheme) errors.push('Scheme is missing')
+        else if (!schemeOptions.includes(scheme)) errors.push(`Unknown scheme: ${rawScheme}`)
         if (!developer) errors.push('Developer is missing')
         if (!['P1', 'P2', 'P3', 'P4'].includes(priorityText)) {
           errors.push(`Unknown priority: ${priorityText || 'blank'}`)
@@ -2095,7 +2203,9 @@ async function handleUpdateTicketDetails(
         </div>
       )}
       <header className="topbar">
-  <div className="header-primary-actions">
+  <div className="dashboard-brand">
+    <p className="eyebrow">INFONEO TEAM QUALITY OPERATIONS</p>
+    <div className="header-primary-actions">
   <button
     className="primary-button"
     type="button"
@@ -2136,10 +2246,6 @@ async function handleUpdateTicketDetails(
     ⇩ Export Excel ({filteredTickets.length})
   </button>
   </div>
-
-  <div className="dashboard-title">
-    <p className="eyebrow">INFONEO TEAM QUALITY OPERATIONS</p>
-    <h1>Ticket dashboard</h1>
   </div>
 
   <button
@@ -2153,6 +2259,85 @@ async function handleUpdateTicketDetails(
     Sign out
   </button>
 </header>
+
+      <section className="sla-penalty-panel" aria-labelledby="sla-penalty-heading">
+        <div className="sla-penalty-heading">
+          <p className="eyebrow">
+            TILL DATE · {new Intl.DateTimeFormat('en-IN', {
+              day: 'numeric',
+              month: 'short',
+              year: 'numeric',
+              timeZone: 'Asia/Kolkata',
+            }).format(new Date())}
+          </p>
+          <h2 id="sla-penalty-heading">SLA penalty summary</h2>
+          <span className="sla-penalty-caption">Based on Reviewed SLA</span>
+        </div>
+
+        <div className="sla-penalty-grid">
+          <button
+            type="button"
+            className={`sla-penalty-metric is-clickable${reviewedSlaFilter === 'Within SLA' ? ' selected' : ''}`}
+            aria-pressed={reviewedSlaFilter === 'Within SLA'}
+            onClick={() => selectReviewedSlaFilter('Within SLA')}
+          >
+            <span>Within SLA <small>(A)</small></span>
+            <strong>{penaltyWithinSlaCount}</strong>
+          </button>
+          <button
+            type="button"
+            className={`sla-penalty-metric is-clickable${reviewedSlaFilter === 'SLA Violated' ? ' selected' : ''}`}
+            aria-pressed={reviewedSlaFilter === 'SLA Violated'}
+            onClick={() => selectReviewedSlaFilter('SLA Violated')}
+          >
+            <span>SLA violated <small>(B)</small></span>
+            <strong>{penaltyViolatedCount}</strong>
+          </button>
+          <button
+            type="button"
+            className={`sla-penalty-metric is-clickable${reviewedSlaFilter === 'Not classified' ? ' selected' : ''}`}
+            aria-pressed={reviewedSlaFilter === 'Not classified'}
+            onClick={() => selectReviewedSlaFilter('Not classified')}
+          >
+            <span>Unresolved / unclassified <small>(C)</small></span>
+            <strong>{penaltyNotClassifiedCount}</strong>
+          </button>
+          <button
+            type="button"
+            className="sla-penalty-metric is-clickable"
+            aria-label={`Total tickets: ${penaltyAssignedCount}. Clear SLA penalty filters.`}
+            onClick={() => selectReviewedSlaFilter(null)}
+          >
+            <span>Total tickets <small>(D)</small></span>
+            <strong>{penaltyAssignedCount}</strong>
+          </button>
+          <div className="sla-penalty-metric">
+            <span>Classified tickets <small>(E)</small></span>
+            <strong>{penaltyResolvedCount}</strong>
+          </div>
+          <div className="sla-penalty-metric">
+            <span>Resolution compliance <small>(F)</small></span>
+            <strong>{penaltyResolutionRate === null ? '—' : `${penaltyResolutionRate.toFixed(2)}%`}</strong>
+          </div>
+          <div className="sla-penalty-metric">
+            <span>Service level target <small>(G)</small></span>
+            <strong>{serviceLevelTargetPercent.toFixed(2)}%</strong>
+          </div>
+          <div className="sla-penalty-metric">
+            <span>Shortfall <small>(H)</small></span>
+            <strong>{penaltyShortfall === null ? '—' : `${penaltyShortfall.toFixed(2)}%`}</strong>
+          </div>
+          <div className="sla-penalty-metric penalty-rate-card">
+            <span>Penalty</span>
+            <strong>{penaltyPercent === null ? '—' : `${penaltyPercent}%`}</strong>
+          </div>
+        </div>
+        <p className="sla-penalty-bands">
+          E = D − C · Compliance = A ÷ E · No shortfall = 0% penalty ·
+          {' '}Shortfall bands: ≤1% = 1% · &gt;1–3% = 3% · &gt;3–5% = 5% ·
+          {' '}&gt;5–6% = 7% · &gt;6–8% = 9% · &gt;8% = 10% · Click A, B, or C to filter tickets.
+        </p>
+      </section>
 
       <div className="dashboard-layout">
         <aside className="dashboard-left">
@@ -2463,12 +2648,15 @@ async function handleUpdateTicketDetails(
               </div>
             </div>
           )}
-          {(dashboardMetricSelection || searchTerm || statusFilter !== 'All' ||
+          {(dashboardMetricSelection || reviewedSlaFilter || searchTerm || statusFilter !== 'All' ||
             priorityFilter !== 'All' || schemeFilter !== 'All' ||
             developerFilter !== 'All' || assignedDateFilter !== 'all' ||
             assignedDateFrom || assignedDateTo || slaRiskFilter) && (
             <div className="active-filter-row">
-              <span>{filteredTickets.length} matching ticket{filteredTickets.length === 1 ? '' : 's'}</span>
+              <span>
+                {filteredTickets.length} matching ticket{filteredTickets.length === 1 ? '' : 's'}
+                {reviewedSlaFilter ? ` · Reviewed SLA: ${reviewedSlaFilter}` : ''}
+              </span>
               <button type="button" onClick={clearDashboardFilters}>Clear filters</button>
             </div>
           )}
@@ -3041,7 +3229,7 @@ async function handleUpdateTicketDetails(
                   <span><strong>{importInvalidCount}</strong> need correction</span>
                 </div>
                 <p className="import-guidance">
-                  Times are read as India time in 24-hour format. “Not Assigned” means unresolved. Awaiting Business Response maps to Business Pending; Closed maps to Resolved. A resolved time before assignment is allowed and flagged for review. Older pause durations are absent from this workbook, so add a note in each ticket’s Remarks if needed; historical SLA totals cannot reconstruct those pauses.
+                  Full scheme names are converted to the configured short forms automatically. Times are read as India time in 24-hour format. “Not Assigned” means unresolved. Awaiting User Response maps to On Hold; Awaiting Business Response maps to Business Pending; Closed maps to Resolved. A resolved time before assignment is allowed and flagged for review. Older pause durations are absent from this workbook, so add a note in each ticket’s Remarks if needed; historical SLA totals cannot reconstruct those pauses.
                 </p>
                 <div className="import-preview-table-wrap">
                   <table className="import-preview-table">
