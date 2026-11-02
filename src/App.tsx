@@ -408,6 +408,8 @@ const [assignedDateFilter, setAssignedDateFilter] =
   const [slaRiskFilter, setSlaRiskFilter] = useState(false)
   const [reviewedSlaFilter, setReviewedSlaFilter] =
     useState<ReviewedSlaFilter>(null)
+  const [actualSlaFilter, setActualSlaFilter] =
+    useState<ReviewedSlaFilter>(null)
   const [currentPage, setCurrentPage] = useState(1)
   const [ticketPageSize, setTicketPageSize] = useState(defaultTicketPageSize)
   const [dashboardMetricSelection, setDashboardMetricSelection] =
@@ -442,6 +444,7 @@ const [editingHolidayId, setEditingHolidayId] = useState<string | null>(null)
     assignedDateTo,
     slaRiskFilter,
     reviewedSlaFilter,
+    actualSlaFilter,
     dashboardMetricSelection?.period,
     dashboardMetricSelection?.key,
     ticketPageSize,
@@ -911,10 +914,26 @@ setHolidayDates(data.map((row) => row.holiday_date))
   const overallMetricCounts = getMetricCounts(overallTickets)
   const slaAtRiskCount = tickets.filter(isSlaAtRisk).length
   const serviceLevelTargetPercent = 95
+  const hasCustomAssignedDateRange = Boolean(assignedDateFrom || assignedDateTo)
+  const assignedDateRangeInvalid = Boolean(
+    assignedDateFrom && assignedDateTo && assignedDateFrom > assignedDateTo,
+  )
+  const penaltyPeriodLabel = hasCustomAssignedDateRange
+    ? 'SELECTED DATE RANGE'
+    : assignedDateFilter === 'all'
+      ? 'TILL DATE'
+      : assignedDateOptions.find((option) => option.value === assignedDateFilter)?.label.toUpperCase() ?? 'TILL DATE'
   const indiaTodayKey = getIndiaDateKey(new Date().toISOString())
   const penaltyTickets = tickets.filter((ticket) => {
     const assignedDateKey = getIndiaDateKey(ticket.assignedAt)
-    return !assignedDateKey || assignedDateKey <= indiaTodayKey
+    const matchesSelectedAssignedDate = hasCustomAssignedDateRange
+      ? !assignedDateRangeInvalid &&
+        assignedDateKey !== '' &&
+        (!assignedDateFrom || assignedDateKey >= assignedDateFrom) &&
+        (!assignedDateTo || assignedDateKey <= assignedDateTo)
+      : isAssignedDateInFilter(ticket.assignedAt, assignedDateFilter)
+    return matchesSelectedAssignedDate &&
+      (!assignedDateKey || assignedDateKey <= indiaTodayKey)
   })
   const penaltyWithinSlaCount = penaltyTickets.filter(
     (ticket) =>
@@ -952,11 +971,41 @@ setHolidayDates(data.map((row) => row.holiday_date))
               : penaltyShortfall <= 8
                 ? 9
                 : 10
-  const hasCustomAssignedDateRange = Boolean(assignedDateFrom || assignedDateTo)
-  const assignedDateRangeInvalid = Boolean(
-    assignedDateFrom && assignedDateTo && assignedDateFrom > assignedDateTo,
-  )
-
+  const actualSlaWithinCount = penaltyTickets.filter(
+    (ticket) =>
+      ticket.status === 'Resolved' &&
+      getSlaStatusLabel(ticket) === 'Within SLA',
+  ).length
+  const actualSlaViolatedCount = penaltyTickets.filter(
+    (ticket) =>
+      ticket.status === 'Resolved' &&
+      getSlaStatusLabel(ticket) === 'SLA Violated',
+  ).length
+  const actualSlaUnclassifiedCount =
+    penaltyTickets.length - actualSlaWithinCount - actualSlaViolatedCount
+  const actualSlaClassifiedCount =
+    penaltyTickets.length - actualSlaUnclassifiedCount
+  const actualSlaCompliance = actualSlaClassifiedCount > 0
+    ? (actualSlaWithinCount / actualSlaClassifiedCount) * 100
+    : null
+  const actualSlaShortfall = actualSlaCompliance === null
+    ? null
+    : Math.max(0, serviceLevelTargetPercent - actualSlaCompliance)
+  const actualSlaPenaltyPercent = actualSlaShortfall === null
+    ? null
+    : actualSlaShortfall === 0
+      ? 0
+      : actualSlaShortfall <= 1
+        ? 1
+        : actualSlaShortfall <= 3
+          ? 3
+          : actualSlaShortfall <= 5
+            ? 5
+            : actualSlaShortfall <= 6
+              ? 7
+              : actualSlaShortfall <= 8
+                ? 9
+                : 10
   const filteredTickets = tickets.filter((ticket) => {
     const search = searchTerm.toLowerCase()
     const matchesSearch =
@@ -993,9 +1042,19 @@ setHolidayDates(data.map((row) => row.holiday_date))
             (reviewedSlaLabel !== 'Within SLA' && reviewedSlaLabel !== 'SLA Violated')
     )
 
+    const actualSlaLabel = getSlaStatusLabel(ticket)
+    const matchesActualSla = !actualSlaFilter || (
+      actualSlaFilter === 'Within SLA'
+        ? ticket.status === 'Resolved' && actualSlaLabel === 'Within SLA'
+        : actualSlaFilter === 'SLA Violated'
+          ? ticket.status === 'Resolved' && actualSlaLabel === 'SLA Violated'
+          : ticket.status !== 'Resolved' ||
+            (actualSlaLabel !== 'Within SLA' && actualSlaLabel !== 'SLA Violated')
+    )
+
     return matchesSearch && matchesStatus && matchesPriority &&
       matchesScheme && matchesDeveloper && matchesAssignedDate &&
-      matchesSelectedMetric && matchesSlaRisk && matchesReviewedSla
+      matchesSelectedMetric && matchesSlaRisk && matchesReviewedSla && matchesActualSla
   })
 
   const totalTicketPages = Math.max(1, Math.ceil(filteredTickets.length / ticketPageSize))
@@ -1114,6 +1173,7 @@ setHolidayDates(data.map((row) => row.holiday_date))
     setAssignedDateTo('')
     setSlaRiskFilter(false)
     setReviewedSlaFilter(null)
+    setActualSlaFilter(null)
   }
 
   const selectReviewedSlaFilter = (filter: ReviewedSlaFilter) => {
@@ -1123,6 +1183,15 @@ setHolidayDates(data.map((row) => row.holiday_date))
     }
     clearDashboardFilters()
     setReviewedSlaFilter(filter)
+  }
+
+  const selectActualSlaFilter = (filter: ReviewedSlaFilter) => {
+    if (filter !== null && actualSlaFilter === filter) {
+      clearDashboardFilters()
+      return
+    }
+    clearDashboardFilters()
+    setActualSlaFilter(filter)
   }
 
   async function handleAddHoliday(event: FormEvent<HTMLFormElement>) {
@@ -2367,7 +2436,7 @@ async function handleUpdateTicketDetails(
       <section className="sla-penalty-panel" aria-labelledby="sla-penalty-heading">
         <div className="sla-penalty-heading">
           <p className="eyebrow">
-            TILL DATE · {new Intl.DateTimeFormat('en-IN', {
+            {penaltyPeriodLabel} · {new Intl.DateTimeFormat('en-IN', {
               day: 'numeric',
               month: 'short',
               year: 'numeric',
@@ -2436,13 +2505,76 @@ async function handleUpdateTicketDetails(
             <strong>{penaltyPercent === null ? '—' : `${penaltyPercent}%`}</strong>
           </div>
         </div>
+
+      </section>
+
+      <section className="actual-sla-panel" aria-labelledby="actual-sla-heading">
+        <div className="actual-sla-heading">
+          <h2 id="actual-sla-heading">Actual SLA calculation</h2>
+          <span>Based on actual SLA due and resolution times · Same assigned date filter</span>
+        </div>
+        <div className="actual-sla-metrics">
+          <button
+            type="button"
+            className={`actual-sla-metric is-clickable${actualSlaFilter === 'Within SLA' ? ' selected' : ''}`}
+            aria-pressed={actualSlaFilter === 'Within SLA'}
+            title="Click to filter by actual Within SLA tickets"
+            onClick={() => selectActualSlaFilter('Within SLA')}
+          >
+            <span>Within SLA <small>(A)</small></span>
+            <strong>{actualSlaWithinCount}</strong>
+          </button>
+          <button
+            type="button"
+            className={`actual-sla-metric is-clickable${actualSlaFilter === 'SLA Violated' ? ' selected' : ''}`}
+            aria-pressed={actualSlaFilter === 'SLA Violated'}
+            title="Click to filter by actual SLA violated tickets"
+            onClick={() => selectActualSlaFilter('SLA Violated')}
+          >
+            <span>SLA violated <small>(B)</small></span>
+            <strong>{actualSlaViolatedCount}</strong>
+          </button>
+          <button
+            type="button"
+            className={`actual-sla-metric is-clickable${actualSlaFilter === 'Not classified' ? ' selected' : ''}`}
+            aria-pressed={actualSlaFilter === 'Not classified'}
+            title="Click to filter by actual unresolved or unclassified tickets"
+            onClick={() => selectActualSlaFilter('Not classified')}
+          >
+            <span>Unresolved / unclassified <small>(C)</small></span>
+            <strong>{actualSlaUnclassifiedCount}</strong>
+          </button>
+          <div className="actual-sla-metric">
+            <span>Total tickets <small>(D)</small></span>
+            <strong>{penaltyTickets.length}</strong>
+          </div>
+          <div className="actual-sla-metric">
+            <span>Classified tickets <small>(E)</small></span>
+            <strong>{actualSlaClassifiedCount}</strong>
+          </div>
+          <div className="actual-sla-metric">
+            <span>Resolution compliance <small>(F)</small></span>
+            <strong>{actualSlaCompliance === null ? '—' : `${actualSlaCompliance.toFixed(2)}%`}</strong>
+          </div>
+          <div className="actual-sla-metric">
+            <span>Service level target <small>(G)</small></span>
+            <strong>{serviceLevelTargetPercent.toFixed(2)}%</strong>
+          </div>
+          <div className="actual-sla-metric">
+            <span>Shortfall <small>(H)</small></span>
+            <strong>{actualSlaShortfall === null ? '—' : `${actualSlaShortfall.toFixed(2)}%`}</strong>
+          </div>
+          <div className="actual-sla-metric actual-sla-penalty">
+            <span>Penalty</span>
+            <strong>{actualSlaPenaltyPercent === null ? '—' : `${actualSlaPenaltyPercent}%`}</strong>
+          </div>
+        </div>
         <p className="sla-penalty-bands">
           E = D − C · Compliance = A ÷ E · No shortfall = 0% penalty ·
           {' '}Shortfall bands: ≤1% = 1% · &gt;1–3% = 3% · &gt;3–5% = 5% ·
           {' '}&gt;5–6% = 7% · &gt;6–8% = 9% · &gt;8% = 10% · Click A, B, or C to filter tickets.
         </p>
       </section>
-
       <div className="dashboard-layout">
         <aside className="dashboard-left">
           {renderMetricComparisonPanel()}
@@ -2752,7 +2884,7 @@ async function handleUpdateTicketDetails(
               </div>
             </div>
           )}
-          {(dashboardMetricSelection || reviewedSlaFilter || searchTerm || statusFilter !== 'All' ||
+          {(dashboardMetricSelection || reviewedSlaFilter || actualSlaFilter || searchTerm || statusFilter !== 'All' ||
             priorityFilter !== 'All' || schemeFilter !== 'All' ||
             developerFilter !== 'All' || assignedDateFilter !== 'all' ||
             assignedDateFrom || assignedDateTo || slaRiskFilter) && (
@@ -2760,6 +2892,7 @@ async function handleUpdateTicketDetails(
               <span>
                 {filteredTickets.length} matching ticket{filteredTickets.length === 1 ? '' : 's'}
                 {reviewedSlaFilter ? ` · Reviewed SLA: ${reviewedSlaFilter}` : ''}
+                {actualSlaFilter ? ` · Actual SLA: ${actualSlaFilter}` : ''}
               </span>
               <button type="button" onClick={clearDashboardFilters}>Clear filters</button>
             </div>
