@@ -356,6 +356,9 @@ function App() {
   const isTicketAdmin =
     session?.user.email?.toLowerCase() === 'ncgtc.support@infoneo.in'
   const [authLoading, setAuthLoading] = useState(true)
+  const [slackNotificationsEnabled, setSlackNotificationsEnabled] = useState<boolean | null>(null)
+  const [slackNotificationsSaving, setSlackNotificationsSaving] = useState(false)
+  const [slackNotificationsError, setSlackNotificationsError] = useState('')
 
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null)
   const [slaReviewTicket, setSlaReviewTicket] = useState<Ticket | null>(null)
@@ -471,6 +474,66 @@ const [editingHolidayId, setEditingHolidayId] = useState<string | null>(null)
 
     return () => subscription.unsubscribe()
   }, [])
+
+  useEffect(() => {
+    if (!session || !isTicketAdmin) {
+      setSlackNotificationsEnabled(null)
+      setSlackNotificationsError('')
+      return
+    }
+
+    let cancelled = false
+
+    async function loadSlackNotificationSetting() {
+      const { data, error } = await supabase.rpc(
+        'admin_get_slack_notifications_enabled',
+      )
+
+      if (cancelled) return
+      if (error) {
+        setSlackNotificationsError('Could not load the Slack alert setting.')
+        return
+      }
+
+      setSlackNotificationsEnabled(data === true)
+    }
+
+    void loadSlackNotificationSetting()
+
+    return () => {
+      cancelled = true
+    }
+  }, [session?.user.id, isTicketAdmin])
+
+  async function handleSlackNotificationsToggle() {
+    if (
+      !isTicketAdmin ||
+      slackNotificationsEnabled === null ||
+      slackNotificationsSaving
+    ) return
+
+    const nextEnabled = !slackNotificationsEnabled
+    setSlackNotificationsSaving(true)
+    setSlackNotificationsError('')
+
+    try {
+      const { data, error } = await supabase.rpc(
+        'admin_set_slack_notifications_enabled',
+        { p_enabled: nextEnabled },
+      )
+
+      if (error) {
+        setSlackNotificationsError('Could not update the Slack alert setting.')
+        return
+      }
+
+      setSlackNotificationsEnabled(data === true)
+    } catch {
+      setSlackNotificationsError('Could not update the Slack alert setting.')
+    } finally {
+      setSlackNotificationsSaving(false)
+    }
+  }
 
   useEffect(() => {
   const intervalId = window.setInterval(() => {
@@ -2248,8 +2311,48 @@ async function handleUpdateTicketDetails(
   </div>
   </div>
 
-  <button
-    className="header-signout-button"
+  <div className="header-account-actions">
+    {isTicketAdmin && (
+      <div className="slack-alert-control">
+        <div className="slack-alert-copy">
+          <strong>Slack alerts</strong>
+          <span aria-live="polite">
+            {slackNotificationsEnabled === null
+              ? 'Checking status...'
+              : slackNotificationsEnabled
+                ? 'On'
+                : 'Off'}
+          </span>
+        </div>
+        <button
+          className="slack-alert-switch"
+          type="button"
+          role="switch"
+          aria-checked={slackNotificationsEnabled ?? false}
+          aria-label={
+            slackNotificationsEnabled
+              ? 'Turn Slack notifications off'
+              : 'Turn Slack notifications on'
+          }
+          title={
+            slackNotificationsEnabled
+              ? 'Pause all Slack notifications'
+              : 'Resume Slack notifications'
+          }
+          disabled={slackNotificationsEnabled === null || slackNotificationsSaving}
+          onClick={() => void handleSlackNotificationsToggle()}
+        >
+          <span aria-hidden="true" />
+        </button>
+        {slackNotificationsError && (
+          <span className="slack-alert-error" role="alert">
+            {slackNotificationsError}
+          </span>
+        )}
+      </div>
+    )}
+    <button
+      className="header-signout-button"
     type="button"
     onClick={async () => {
       const { error } = await supabase.auth.signOut()
@@ -2258,6 +2361,7 @@ async function handleUpdateTicketDetails(
   >
     Sign out
   </button>
+  </div>
 </header>
 
       <section className="sla-penalty-panel" aria-labelledby="sla-penalty-heading">
