@@ -176,7 +176,7 @@
   margin-bottom: 14px;
   border: 1px solid #dbe4f0;
   border-radius: 12px;
-  padding: 11px 12px 9px;
+  padding: 13px 14px 11px;
   background: linear-gradient(135deg, #fff 0%, #f8faff 100%);
   box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
 }
@@ -185,8 +185,8 @@
   display: flex;
   align-items: baseline;
   flex-wrap: wrap;
-  gap: 3px 12px;
-  margin-bottom: 8px;
+  gap: 4px 12px;
+  margin-bottom: 10px;
 }
 
 .sla-penalty-heading .eyebrow {
@@ -209,7 +209,7 @@
 .sla-penalty-grid {
   display: flex;
   flex-wrap: wrap;
-  gap: 5px;
+  gap: 7px;
 }
 
 .sla-penalty-metric {
@@ -221,7 +221,7 @@
   gap: 8px;
   border: 1px solid #e2e8f0;
   border-radius: 6px;
-  padding: 4px 7px;
+  padding: 10px 7px;
   background: #f8fafc;
   color: #334155;
   text-align: left;
@@ -235,8 +235,7 @@ button.sla-penalty-metric {
 
 button.sla-penalty-metric:hover {
   transform: translateY(-1px);
-  border-color: #a5b4fc;
-  background: #f8faff;
+  filter: saturate(1.15);
 }
 
 button.sla-penalty-metric.selected {
@@ -247,50 +246,50 @@ button.sla-penalty-metric.selected {
 
 .sla-penalty-metric > span {
   color: #64748b;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 650;
-  line-height: 1.2;
+  line-height: 1.25;
   white-space: nowrap;
 }
 
 .sla-penalty-metric > span small {
   color: #94a3b8;
-  font-size: 8px;
+  font-size: 9px;
   font-weight: 650;
 }
 
 .sla-penalty-metric > strong {
   color: #172033;
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.1;
   white-space: nowrap;
 }
 
 .sla-penalty-metric > small {
   color: #64748b;
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.35;
 }
 
 .penalty-rate-card {
-  border-color: #fed7aa;
-  background: #fffaf5;
+  border-color: #fda4af;
+  background: #fff1f2;
 }
 
-.penalty-rate-card > strong { color: #c2410c; }
+.penalty-rate-card > strong { color: #be123c; }
 
 .sla-penalty-bands {
-  margin: 7px 0 0;
+  margin: 8px 0 0;
   color: #64748b;
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1.35;
 }
 
 .actual-sla-panel {
   margin: -6px 0 14px;
   border: 1px solid #dbe4f0;
-  border-radius: 10px;
-  padding: 8px 10px;
+  border-radius: 12px;
+  padding: 13px 14px 11px;
   background: #fff;
 }
 
@@ -299,25 +298,25 @@ button.sla-penalty-metric.selected {
   align-items: baseline;
   flex-wrap: wrap;
   gap: 4px 9px;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
 
 .actual-sla-heading h2 {
   margin: 0;
   color: #334155;
-  font-size: 12px;
+  font-size: 14px;
   letter-spacing: -0.01em;
 }
 
 .actual-sla-heading > span {
   color: #64748b;
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .actual-sla-metrics {
   display: flex;
   flex-wrap: wrap;
-  gap: 5px;
+  gap: 7px;
 }
 
 .actual-sla-metric {
@@ -329,19 +328,19 @@ button.sla-penalty-metric.selected {
   gap: 8px;
   border: 1px solid #e2e8f0;
   border-radius: 6px;
-  padding: 4px 7px;
+  padding: 10px 7px;
   background: #f8fafc;
 }
 
 .actual-sla-metric > span {
   color: #64748b;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 650;
   white-space: nowrap;
 }
 .actual-sla-metric > span small {
   color: #94a3b8;
-  font-size: 8px;
+  font-size: 9px;
   font-weight: 650;
 }
 
@@ -355,8 +354,7 @@ button.actual-sla-metric {
 
 button.actual-sla-metric:hover {
   transform: translateY(-1px);
-  border-color: #a5b4fc;
-  background: #f8faff;
+  filter: saturate(1.15);
 }
 
 button.actual-sla-metric.selected {
@@ -367,18 +365,79 @@ button.actual-sla-metric.selected {
 
 .actual-sla-metric > strong {
   color: #172033;
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.1;
   white-space: nowrap;
 }
 
 .actual-sla-penalty {
-  border-color: #fed7aa;
-  background: #fffaf5;
+  border-color: #fda4af;
+  background: #fff1f2;
 }
 
 .actual-sla-penalty > strong {
-  color: #c2410c;
+  color: #be123c;
+}
+
+/* Keep matching metric colors in the Reviewed and Actual SLA summaries. */
+.sla-penalty-metric,
+.actual-sla-metric {
+  border-color: var(--metric-border, #e2e8f0);
+  background: var(--metric-bg, #f8fafc);
+}
+
+.sla-penalty-metric:nth-child(1),
+.actual-sla-metric:nth-child(1) {
+  --metric-bg: #ecfdf3;
+  --metric-border: #86efac;
+}
+
+.sla-penalty-metric:nth-child(2),
+.actual-sla-metric:nth-child(2) {
+  --metric-bg: #fef2f2;
+  --metric-border: #fca5a5;
+}
+
+.sla-penalty-metric:nth-child(3),
+.actual-sla-metric:nth-child(3) {
+  --metric-bg: #fffbeb;
+  --metric-border: #fcd34d;
+}
+
+.sla-penalty-metric:nth-child(4),
+.actual-sla-metric:nth-child(4) {
+  --metric-bg: #eff6ff;
+  --metric-border: #93c5fd;
+}
+
+.sla-penalty-metric:nth-child(5),
+.actual-sla-metric:nth-child(5) {
+  --metric-bg: #f5f3ff;
+  --metric-border: #c4b5fd;
+}
+
+.sla-penalty-metric:nth-child(6),
+.actual-sla-metric:nth-child(6) {
+  --metric-bg: #ecfeff;
+  --metric-border: #67e8f9;
+}
+
+.sla-penalty-metric:nth-child(7),
+.actual-sla-metric:nth-child(7) {
+  --metric-bg: #f0f9ff;
+  --metric-border: #7dd3fc;
+}
+
+.sla-penalty-metric:nth-child(8),
+.actual-sla-metric:nth-child(8) {
+  --metric-bg: #fff7ed;
+  --metric-border: #fdba74;
+}
+
+.sla-penalty-metric:nth-child(9),
+.actual-sla-metric:nth-child(9) {
+  --metric-bg: #fff1f2;
+  --metric-border: #fda4af;
 }
 .dashboard-layout {
   display: grid;
@@ -873,7 +932,7 @@ tbody tr:hover { background: #f8fafc; }
   .topbar { grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 14px; }
   .dashboard-brand { gap: 9px; }
   .header-primary-actions { flex-wrap: wrap; }
-  .sla-penalty-panel { padding: 10px; }
+  .sla-penalty-panel { padding: 12px; }
   .sla-penalty-heading { align-items: flex-start; }
   .dashboard-layout { grid-template-columns: 1fr; }
   .dashboard-left { grid-column: 1; grid-row: 1; grid-template-columns: 1fr; }
