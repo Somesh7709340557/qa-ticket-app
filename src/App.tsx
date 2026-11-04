@@ -23,7 +23,7 @@ type Ticket = {
   slaDueAt?: string
   onHoldStartedAt?: string
   resolvedAt?: string
-  reviewedSlaOverride?: 'Within SLA' | null
+  reviewedSlaOverride?: 'Within SLA' | 'SLA Violated' | null
   reviewedSlaRemark?: string
   reviewedSlaAt?: string
   reviewedSlaBy?: string
@@ -363,7 +363,7 @@ function App() {
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null)
   const [slaReviewTicket, setSlaReviewTicket] = useState<Ticket | null>(null)
   const [slaReviewSelection, setSlaReviewSelection] =
-    useState<'SLA Violated' | 'Within SLA'>('SLA Violated')
+    useState<'Calculated result' | 'SLA Violated' | 'Within SLA'>('Calculated result')
   const [slaReviewRemark, setSlaReviewRemark] = useState('')
   const [slaReviewError, setSlaReviewError] = useState('')
   const [isSavingSlaReview, setIsSavingSlaReview] = useState(false)
@@ -1931,7 +1931,9 @@ async function handleDeleteHoliday(holiday: Holiday) {
     setSlaReviewError('')
     setIsSavingSlaReview(true)
     const reviewedSlaOverride =
-      slaReviewSelection === 'Within SLA' ? 'Within SLA' : null
+      slaReviewSelection === 'Calculated result' ? null : slaReviewSelection
+    const reviewedStatus =
+      reviewedSlaOverride ?? getSlaStatusLabel(slaReviewTicket)
 
     try {
       const { error } = await supabase.rpc('review_ticket_sla', {
@@ -1964,12 +1966,15 @@ async function handleDeleteHoliday(holiday: Holiday) {
         ...current,
         [updatedTicket.id]: [
           ...(current[updatedTicket.id] ?? []),
-          formatDateTime(reviewedAt) + ' — SLA review: ' + slaReviewSelection + '. ' + remark,
+          formatDateTime(reviewedAt) + ' — SLA review: ' +
+            (slaReviewSelection === 'Calculated result'
+              ? 'calculated result (' + reviewedStatus + ')'
+              : reviewedStatus) + '. ' + remark,
         ],
       }))
       setTicketDetailsToast({
         title: 'SLA review saved',
-        message: updatedTicket.id + ' reviewed as ' + slaReviewSelection + '.',
+        message: updatedTicket.id + ' reviewed as ' + reviewedStatus + '.',
       })
       setSlaReviewTicket(null)
       setSlaReviewRemark('')
@@ -2183,9 +2188,49 @@ async function handleUpdateTicketDetails(
     return
   }
 
+  let nextSlaDueAt: Date | null = null
+  if (priority !== selectedTicket.priority) {
+    if (!selectedTicket.assignedAt) {
+      alert('Priority could not be changed because the ticket has no assigned time to calculate its SLA deadline.')
+      return
+    }
+
+    const previousSlaDueAt = selectedTicket.slaDueAt
+      ? new Date(selectedTicket.slaDueAt)
+      : null
+    const previousBaselineDueAt = addBusinessHours(
+      selectedTicket.assignedAt,
+      SLA_HOURS_BY_PRIORITY[selectedTicket.priority],
+      holidayDates,
+    )
+    const previouslyPausedBusinessHours = previousSlaDueAt
+      ? Math.max(
+          0,
+          getBusinessHoursBetween(
+            previousBaselineDueAt,
+            previousSlaDueAt,
+            holidayDates,
+          ),
+        )
+      : 0
+
+    nextSlaDueAt = addBusinessHours(
+      selectedTicket.assignedAt,
+      SLA_HOURS_BY_PRIORITY[priority] + previouslyPausedBusinessHours,
+      holidayDates,
+    )
+  }
+
   const { error } = await supabase
     .from('tickets')
-    .update({ title, scheme, priority })
+    .update({
+      title,
+      scheme,
+      priority,
+      ...(nextSlaDueAt
+        ? { sla_due_at: nextSlaDueAt.toISOString() }
+        : {}),
+    })
     .eq('id', selectedTicket.id)
 
   if (error) {
@@ -2193,7 +2238,20 @@ async function handleUpdateTicketDetails(
     return
   }
 
-  const updatedTicket = { ...selectedTicket, title, scheme, priority, }
+  const updatedTicket: Ticket = {
+    ...selectedTicket,
+    title,
+    scheme,
+    priority,
+    slaDueAt: nextSlaDueAt?.toISOString() ?? selectedTicket.slaDueAt,
+    due:
+      selectedTicket.status === 'On Hold' ||
+      selectedTicket.status === 'Business Pending'
+        ? 'Paused'
+        : nextSlaDueAt
+          ? formatDateTime(nextSlaDueAt)
+          : selectedTicket.due,
+  }
 
   setTickets((currentTickets) =>
     currentTickets.map((ticket) =>
@@ -2982,7 +3040,8 @@ async function handleUpdateTicketDetails(
                     <td><span className="status">{ticket.status}</span></td>
                     <td>
                       {getSlaStatusLabel(ticket) === 'SLA Violated' ||
-                      ticket.reviewedSlaOverride === 'Within SLA' ? (
+                      getSlaStatusLabel(ticket) === 'Within SLA' ||
+                      ticket.reviewedSlaOverride != null ? (
                         <button
                           type="button"
                           className="sla-review-trigger"
@@ -2997,9 +3056,7 @@ async function handleUpdateTicketDetails(
                             event.stopPropagation()
                             setSlaReviewTicket(ticket)
                             setSlaReviewSelection(
-                              getReviewedSlaStatusLabel(ticket) === 'Within SLA'
-                                ? 'Within SLA'
-                                : 'SLA Violated',
+                              ticket.reviewedSlaOverride ?? 'Calculated result',
                             )
                             setSlaReviewRemark('')
                             setSlaReviewError('')
@@ -3354,12 +3411,17 @@ async function handleUpdateTicketDetails(
                   required
                   value={slaReviewSelection}
                   onChange={(event) => {
-                    setSlaReviewSelection(event.target.value as 'SLA Violated' | 'Within SLA')
+                    setSlaReviewSelection(
+                      event.target.value as 'Calculated result' | 'SLA Violated' | 'Within SLA',
+                    )
                     setSlaReviewError('')
                   }}
                 >
-                  <option value="SLA Violated">SLA Violated (calculated result)</option>
+                  <option value="Calculated result">
+                    Use calculated result ({getSlaStatusLabel(slaReviewTicket)})
+                  </option>
                   <option value="Within SLA">Within SLA</option>
+                  <option value="SLA Violated">SLA Violated</option>
                 </select>
               </label>
               <label className="ticket-form-field sla-review-note-field">
@@ -3375,7 +3437,7 @@ async function handleUpdateTicketDetails(
                   placeholder="Add a new remark for this review."
                 />
                 <small id="sla-review-guidance">
-                  Choose “SLA Violated (calculated result)” to remove the Within SLA override. Each change needs a new remark.
+                  Choose “Use calculated result” to remove the reviewed status override. Each change needs a new remark.
                 </small>
                 {slaReviewError && (
                   <p className="sla-review-error" role="alert">{slaReviewError}</p>

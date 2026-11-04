@@ -11,7 +11,10 @@ alter table public.tickets
 
 alter table public.tickets
   add constraint tickets_reviewed_sla_override_check
-  check (reviewed_sla_override is null or reviewed_sla_override = 'Within SLA');
+  check (
+    reviewed_sla_override is null
+    or reviewed_sla_override in ('Within SLA', 'SLA Violated')
+  );
 
 grant select (
   reviewed_sla_override,
@@ -44,8 +47,8 @@ begin
   end if;
 
   if p_reviewed_sla_override is not null
-    and p_reviewed_sla_override <> 'Within SLA' then
-    raise exception 'Reviewed SLA must be Within SLA or the calculated result.'
+    and p_reviewed_sla_override not in ('Within SLA', 'SLA Violated') then
+    raise exception 'Reviewed SLA must be Within SLA, SLA Violated, or null for the calculated result.'
       using errcode = '22023';
   end if;
 
@@ -70,6 +73,8 @@ begin
     case
       when p_reviewed_sla_override = 'Within SLA'
         then 'SLA review set to Within SLA: '
+      when p_reviewed_sla_override = 'SLA Violated'
+        then 'SLA review set to SLA Violated: '
       else 'SLA review reset to the calculated result: '
     end || v_remark;
 
